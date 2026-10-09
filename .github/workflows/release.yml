@@ -28,13 +28,15 @@ jobs:
       - name: Paket schnüren
         shell: bash
         run: |
-          mkdir -p dist/${{ matrix.name }}
-          cp target/release/${{ matrix.bin }} README.md LICENSE dist/${{ matrix.name }}/
-          cp -r assets dist/${{ matrix.name }}/
-          cd dist
-          if [ "${{ matrix.archive }}" = "zip" ]; then 7z a ${{ matrix.name }}.zip ${{ matrix.name }}; else tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}; fi
+          mkdir -p pkg/${{ matrix.name }} dist
+          cp target/release/${{ matrix.bin }} README.md LICENSE pkg/${{ matrix.name }}/
+          cp -r assets pkg/${{ matrix.name }}/
+          cd pkg
+          if [ "${{ matrix.archive }}" = "zip" ]; then 7z a ../dist/${{ matrix.name }}.zip ${{ matrix.name }}; else tar czf ../dist/${{ matrix.name }}.tar.gz ${{ matrix.name }}; fi
+          cd ..
           # plain binary for nEdit's built-in updater
-          cp ../target/release/${{ matrix.bin }} ${{ matrix.raw }}
+          cp target/release/${{ matrix.bin }} dist/${{ matrix.raw }}
+          ls -la dist
       - uses: softprops/action-gh-release@v2
         with:
           files: |
