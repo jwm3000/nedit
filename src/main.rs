@@ -21,6 +21,7 @@ mod widgets;
 mod workspace;
 
 fn main() -> eframe::Result {
+    updater::cleanup(); // also records our executable path before any update
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("nEdit {}", updater::VERSION);

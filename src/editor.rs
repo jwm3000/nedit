@@ -23,6 +23,8 @@ pub struct Buffer {
     pub col: usize,
     hl_cache: Option<(u64, LayoutJob)>,
     vis_cache: Option<(u64, Vec<crate::visual::Span>, Vec<crate::visual::Decor>)>,
+    search_cache: Option<(u64, String, Vec<(usize, usize)>)>,
+    search_pulse: (usize, f64),
     pub doc_height: f32,
     pub last_edit: f64,
     pub completion: Option<Completion>,
@@ -63,6 +65,8 @@ impl Buffer {
             col: 1,
             hl_cache: None,
             vis_cache: None,
+            search_cache: None,
+            search_pulse: (usize::MAX, 0.0),
             doc_height: 0.0,
             last_edit: 0.0,
             completion: None,
@@ -668,6 +672,8 @@ pub struct EditorStyle<'a> {
     pub visual: bool,
     pub embedded: bool,
     pub git_marks: &'a [crate::git::LineMark],
+    /// Active search query (find bar open) – matches get highlighted.
+    pub search: Option<&'a str>,
 }
 
 pub struct EditorOutput {
@@ -967,6 +973,7 @@ fn editor_core(
     let raw = if visual && (has_focus || buf.completion.is_some()) { Some(line_range_bytes(&buf.text, buf.cursor)) } else { None };
 
     let bg_idx = ui.painter().add(Shape::Noop);
+    let search_idx = ui.painter().add(Shape::Noop);
     let chip_idx = ui.painter().add(Shape::Noop);
     let syn = st.syntax;
     let size = st.font_size;
@@ -1169,6 +1176,79 @@ fn editor_core(
         }
     }
 
+    // ── search highlights ──
+    if let Some(q) = st.search.filter(|q| !q.is_empty()) {
+        let th = hash_str(&buf.text);
+        if buf.search_cache.as_ref().is_none_or(|(h, cq, _)| *h != th || cq != q) {
+            buf.search_cache = Some((th, q.to_string(), find_matches(&buf.text, q)));
+        }
+        let matches = &buf.search_cache.as_ref().unwrap().2;
+        let (sa, sb) = (buf.cursor.min(buf.sel_end), buf.cursor.max(buf.sel_end));
+        let current = matches.iter().position(|m| m.0 == sa && m.1 == sb);
+        let now = ui.input(|i| i.time);
+        if let Some(c) = current {
+            if buf.search_pulse.0 != matches[c].0 {
+                buf.search_pulse = (matches[c].0, now);
+            }
+        }
+        let hit = mix(pal.yellow, pal.orange, 0.3);
+        let mut shapes = vec![];
+        let mut ticks = vec![];
+        for (k, &(a, b)) in matches.iter().enumerate() {
+            let r0 = galley.pos_from_cursor(CCursor::new(a)).translate(gpos.to_vec2());
+            let r1 = galley.pos_from_cursor(CCursor { index: b.into(), prefer_next_row: false }).translate(gpos.to_vec2());
+            let is_cur = current == Some(k);
+            ticks.push((r0.center().y, is_cur));
+            if r1.max.y < clip.min.y || r0.min.y > clip.max.y {
+                continue;
+            }
+            // one rect per visual row the match spans
+            let mut rects = vec![];
+            if (r0.min.y - r1.min.y).abs() < 1.0 {
+                rects.push(Rect::from_min_max(pos2(r0.min.x, r0.min.y), pos2(r1.min.x.max(r0.min.x + 3.0), r0.max.y)));
+            } else {
+                for row in &galley.rows {
+                    let ry0 = gpos.y + row.pos.y;
+                    let ry1 = ry0 + row.size.y;
+                    if ry1 <= r0.min.y + 0.5 || ry0 >= r1.max.y - 0.5 {
+                        continue;
+                    }
+                    let x0 = if (ry0 - r0.min.y).abs() < 1.0 { r0.min.x } else { gpos.x + row.pos.x };
+                    let x1 = if (ry0 - r1.min.y).abs() < 1.0 { r1.min.x } else { gpos.x + row.pos.x + row.size.x };
+                    rects.push(Rect::from_min_max(pos2(x0, ry0), pos2(x1.max(x0 + 3.0), ry1)));
+                }
+            }
+            for r in rects {
+                let r = r.expand2(vec2(1.5, 0.0));
+                if is_cur {
+                    let age = (now - buf.search_pulse.1) as f32;
+                    let pulse = (1.0 - age / 0.6).clamp(0.0, 1.0);
+                    if pulse > 0.0 {
+                        shapes.push(Shape::rect_filled(r.expand(2.0 + 6.0 * pulse), 6.0, with_alpha(pal.accent, (60.0 * pulse) as u8)));
+                        ui.ctx().request_repaint();
+                    }
+                    shapes.push(Shape::rect_filled(r.expand(2.5), 5.0, with_alpha(pal.accent, 28)));
+                    shapes.push(Shape::rect_filled(r, 4.0, with_alpha(pal.accent, 95)));
+                    shapes.push(Shape::rect_stroke(r, 4.0, Stroke::new(1.5, pal.accent), egui::StrokeKind::Outside));
+                } else {
+                    shapes.push(Shape::rect_filled(r, 4.0, with_alpha(hit, 70)));
+                    shapes.push(Shape::line_segment([pos2(r.min.x + 2.0, r.max.y - 0.5), pos2(r.max.x - 2.0, r.max.y - 0.5)], Stroke::new(1.5, with_alpha(hit, 200))));
+                }
+            }
+        }
+        painter.set(search_idx, Shape::Vec(shapes));
+        // overview ticks on the right edge of the visible area
+        if !st.embedded && resp_rect.height() > 1.0 {
+            let total = resp_rect.height();
+            for (y, is_cur) in ticks {
+                let f = ((y - resp_rect.min.y) / total).clamp(0.0, 1.0);
+                let ty = clip.min.y + 4.0 + f * (clip.height() - 8.0);
+                let tr = Rect::from_center_size(pos2(clip.max.x - 5.0, ty), vec2(if is_cur { 8.0 } else { 6.0 }, if is_cur { 4.0 } else { 3.0 }));
+                painter.rect_filled(tr, 1.5, if is_cur { pal.accent } else { with_alpha(hit, 210) });
+            }
+        }
+    }
+
     if scroll_to_cursor {
         let r = galley.pos_from_cursor(CCursor::new(buf.cursor)).translate(gpos.to_vec2());
         ui.scroll_to_rect(r.expand2(vec2(0.0, 60.0)), Some(egui::Align::Center));
@@ -1205,4 +1285,27 @@ fn apply_completion(buf: &mut Buffer, comp: &Completion, item: &CompItem) {
 
 fn comp_needs_scroll(ui: &egui::Ui, rect: Rect) -> bool {
     !ui.clip_rect().contains_rect(rect)
+}
+
+/// Case-insensitive matches of `q` in `text` as char ranges.
+pub fn find_matches(text: &str, q: &str) -> Vec<(usize, usize)> {
+    if q.is_empty() {
+        return vec![];
+    }
+    let hay: Vec<char> = text.chars().flat_map(|c| c.to_lowercase().next()).collect();
+    let needle: Vec<char> = q.chars().flat_map(|c| c.to_lowercase().next()).collect();
+    let mut out = vec![];
+    if needle.len() > hay.len() {
+        return out;
+    }
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if hay[i..i + needle.len()] == needle[..] {
+            out.push((i, i + needle.len()));
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
 }

@@ -376,7 +376,7 @@ fn editor_body(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let visual = t == Tab::Thesis && app.settings.visual;
     let root = app.project.root.clone();
     let marks = app.git.line_marks(&root, &rel, app.buffers[bi].disk_stamp);
-    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks };
+    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()) };
     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
     let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src);
     if out.changed {
@@ -519,28 +519,6 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
 
 }
 
-fn find_matches(text: &str, q: &str) -> Vec<(usize, usize)> {
-    if q.is_empty() {
-        return vec![];
-    }
-    let hay: Vec<char> = text.chars().flat_map(|c| c.to_lowercase().next()).collect();
-    let needle: Vec<char> = q.chars().flat_map(|c| c.to_lowercase().next()).collect();
-    let mut out = vec![];
-    if needle.len() > hay.len() {
-        return out;
-    }
-    let mut i = 0;
-    while i + needle.len() <= hay.len() {
-        if hay[i..i + needle.len()] == needle[..] {
-            out.push((i, i + needle.len()));
-            i += needle.len();
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
 fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let bar = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover()).0;
     ui.painter().rect_filled(bar, 0.0, pal.mantle);
@@ -566,7 +544,7 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let query = app.find.query.clone();
     let replace = app.find.replace.clone();
     let Some(b) = app.active_buffer_mut(t) else { return };
-    let matches = find_matches(&b.text, &query);
+    let matches = editor::find_matches(&b.text, &query);
     let cur = b.cursor.min(b.sel_end);
     let idx = matches.iter().position(|m| m.0 == cur && m.1 == b.cursor.max(b.sel_end));
     child.label(egui::RichText::new(if query.is_empty() { String::new() } else if matches.is_empty() { "Keine Treffer".into() } else { format!("{} / {}", idx.map(|i| i + 1).unwrap_or(0), matches.len()) }).font(widgets::ui_font(12.0)).color(pal.dim));
@@ -1389,7 +1367,7 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
                     }
                     let root = app.project.root.clone();
                     let marks = app.git.line_marks(&root, f, app.buffers[bi].disk_stamp);
-                    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks };
+                    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()) };
                     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
                     let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src);
                     let b = &mut app.buffers[bi];

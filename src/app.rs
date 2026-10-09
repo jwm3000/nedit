@@ -215,6 +215,7 @@ pub struct App {
     pub tree_ui: crate::filetree::TreeUi,
     pub updater: crate::updater::Updater,
     update_started: bool,
+    pub close_requested: bool,
 }
 
 impl App {
@@ -281,6 +282,7 @@ impl App {
             tree_ui: Default::default(),
             updater: Default::default(),
             update_started: false,
+            close_requested: false,
         };
         crate::updater::cleanup();
         app.apply_style(&cc.egui_ctx);
@@ -918,6 +920,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
+        if self.close_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             self.debug_shots(&ctx, now, &spec);
         }
@@ -1125,8 +1130,13 @@ impl App {
                         if self.updater.installed {
                             if widgets::button(ui, ic::REFRESH, "Neu starten", pal, BtnKind::Primary).on_hover_text("Update installiert – nEdit neu starten").clicked() {
                                 self.save_all();
-                                crate::updater::restart();
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                match crate::updater::restart() {
+                                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                    Err(e) => {
+                                        let r = pal.red;
+                                        self.toast(ic::WARN, e, r, now);
+                                    }
+                                }
                             }
                         } else if let Some(rel) = &self.updater.available {
                             let label = format!("Update {}", rel.tag);
@@ -1346,9 +1356,11 @@ impl App {
                                 if widgets::button(ui, ic::REFRESH, "Jetzt neu starten", pal, BtnKind::Primary).clicked() {
                                     action = Some(Box::new(|app: &mut App| {
                                         app.save_all();
+                                        match crate::updater::restart() {
+                                            Ok(()) => app.close_requested = true,
+                                            Err(e) => app.updater.status = e,
+                                        }
                                     }));
-                                    crate::updater::restart();
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
                             } else if up.installing {
                                 let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
@@ -1566,9 +1578,14 @@ impl App {
             self.focus_pdf = true;
             self.pdf_win_gen += 1;
         }
-        if name.contains("find") {
+        if name.contains("find") && !self.find.open {
             self.find.open = true;
-            self.find.query = "Grundlagen".into();
+            self.find.query = "hefe".into();
+            if let Some(b) = self.active_buffer_mut(Tab::Thesis) {
+                if let Some(m) = crate::editor::find_matches(&b.text, "Hefe").first().copied() {
+                    b.select(m.0, m.1);
+                }
+            }
         }
         if name.contains("comp") {
             let cites = self.cites.clone();

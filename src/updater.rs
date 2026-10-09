@@ -62,7 +62,7 @@ pub fn asset_name() -> Option<&'static str> {
 
 /// Running from a source checkout (`cargo run` / target dir)? Then updating means `git pull`.
 pub fn source_checkout() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = exe_path()?;
     let mut dir = exe.parent()?;
     while let Some(p) = dir.parent() {
         if dir.file_name().is_some_and(|n| n == "target") && p.join("Cargo.toml").exists() && p.join(".git").exists() {
@@ -101,8 +101,7 @@ fn fetch_latest() -> Result<Release, String> {
 
 /// Put the new binary in place of the running one.
 fn replace_exe(bytes: &[u8]) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe = exe.canonicalize().unwrap_or(exe);
+    let exe = exe_path().ok_or("Programmpfad unbekannt")?;
     let tmp = exe.with_extension("update-new");
     std::fs::write(&tmp, bytes).map_err(|e| format!("Kann nicht nach {} schreiben: {e}", tmp.display()))?;
     #[cfg(unix)]
@@ -123,18 +122,41 @@ fn replace_exe(bytes: &[u8]) -> Result<(), String> {
     })
 }
 
+static EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Path of our executable, captured at startup. After an in-place update Linux reports
+/// the *old* inode as "… (deleted)", so we must not ask again later.
+pub fn exe_path() -> Option<PathBuf> {
+    if let Some(p) = EXE.get() {
+        return Some(p.clone());
+    }
+    let p = std::env::current_exe().ok()?;
+    let s = p.to_string_lossy();
+    let p = PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(&s));
+    let p = p.canonicalize().unwrap_or(p);
+    Some(EXE.get_or_init(|| p).clone())
+}
+
 /// Remove leftovers of a previous Windows update.
 pub fn cleanup() {
-    if let Ok(exe) = std::env::current_exe() {
+    let _ = exe_path();
+    if let Some(exe) = exe_path() {
         let _ = std::fs::remove_file(exe.with_extension("old.exe"));
         let _ = std::fs::remove_file(exe.with_extension("update-new"));
     }
 }
 
-pub fn restart() {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::process::Command::new(exe).spawn();
+/// Start the (new) executable as a detached process; the caller then closes the window.
+pub fn restart() -> Result<(), String> {
+    let exe = exe_path().ok_or("Programmpfad unbekannt")?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // survive the parent closing
     }
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Neustart fehlgeschlagen ({}): {e}", exe.display()))
 }
 
 /// Download a release asset; `progress(done, total)` is called while reading.
