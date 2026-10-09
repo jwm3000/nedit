@@ -1144,7 +1144,7 @@ impl eframe::App for App {
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
                 if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
-                    if name.contains("sltype") && self.debug_typed < 6020 {
+                    if name.contains("sltype") && self.debug_typed < 6060 {
                         // visual slide editor: focus first list item of slide 3, Enter, type
                         if self.debug_typed < 6000 {
                             self.debug_typed = 6000;
@@ -1153,12 +1153,14 @@ impl eframe::App for App {
                         match k {
                             0 => self.slide_ed.debug_focus = Some(crate::slide_ui::field_id(2, &[0], 1000)),
                             4 => raw.events.push(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }),
-                            6 => {
-                                for c in "New point with 50%".chars() {
+                            k @ 6..=40 => {
+                                // one character per frame, like real typing
+                                let s: Vec<char> = "Neuer Punkt mit 50% Ende ".chars().collect();
+                                if let Some(c) = s.get(k - 6) {
                                     raw.events.push(egui::Event::Text(c.to_string()));
                                 }
                             }
-                            19 => {
+                            45 => {
                                 let rel = self.project.config.slides_main.clone();
                                 if let Some(i) = self.buffer_idx(&rel) {
                                     let t = &self.buffers[i].text;

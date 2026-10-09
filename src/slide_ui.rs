@@ -34,6 +34,28 @@ pub struct SlideEditor {
     redo: Vec<String>,
     last_snapshot: f64,
     last_sel: Option<usize>,
+    /// Working copy of the slide being edited: (frame index, slide, hash of the source we
+    /// wrote from it). Fields show this copy, so text is never "normalised" while typing
+    /// (a trailing space, an empty line …); the source only gets the clean LaTeX.
+    draft: Option<(usize, Slide, u64)>,
+}
+
+impl SlideEditor {
+    /// The slide to show: the draft while the source is still what we wrote from it,
+    /// otherwise the freshly parsed one (source changed in code view, undo, git …).
+    fn working_slide(&mut self, sel: usize, source_hash: u64, parsed: &Slide) -> Slide {
+        match &self.draft {
+            Some((f, s, h)) if *f == sel && *h == source_hash => s.clone(),
+            _ => {
+                self.draft = None;
+                parsed.clone()
+            }
+        }
+    }
+
+    fn remember(&mut self, sel: usize, slide: Slide, source_hash: u64) {
+        self.draft = Some((sel, slide, source_hash));
+    }
 }
 
 /// Structural changes requested while drawing; applied afterwards.
@@ -1091,7 +1113,8 @@ impl App {
             w = ((avail.height() - 30.0) / ratio).max(320.0);
         }
         let canvas_rect = Rect::from_min_size(pos2(avail.center().x - w / 2.0, avail.min.y + 8.0), vec2(w, w * ratio));
-        let mut slide = fr.slide.clone();
+        let mut slide = self.slide_ed.working_slide(sel, key, &fr.slide);
+        let base = slide.clone();
         let meta: HashMap<&'static str, String> = deck.meta.iter().map(|m| (m.cmd, m.value.clone())).collect();
         let mut sections: Vec<String> = vec![];
         for f in &deck.frames {
@@ -1208,8 +1231,12 @@ impl App {
         // ── write back ──
         let mut new_text = text.clone();
         let mut cursor_at = fr.start;
-        if slide != fr.slide {
-            new_text.replace_range(fr.start..fr.end, &slides::write_slide(&slide));
+        let edited = slide != base;
+        if edited {
+            let w = slides::write_slide(&slide);
+            if w != text[fr.start..fr.end] {
+                new_text.replace_range(fr.start..fr.end, &w);
+            }
         }
         // preamble metadata (title page) – ranges are before every frame
         let mut metas: Vec<(usize, usize, String)> = meta_edits.into_iter().filter_map(|(cmd, v)| deck.meta.iter().find(|m| m.cmd == cmd).map(|m| (m.range.0, m.range.1, v))).collect();
@@ -1267,8 +1294,18 @@ impl App {
             // focus the new title
             self.slide_ed.focus_next = Some(Id::new(("slide-title", sel + 1)));
         }
+        let structural = slide_op.is_some() || new_tpl.is_some();
+        if edited && !structural {
+            // keep typing state (trailing spaces etc.) for this slide
+            self.slide_ed.remember(sel, slide.clone(), hash_str(&new_text));
+        } else if structural {
+            self.slide_ed.draft = None;
+        }
         if new_text != text {
             self.commit_slides(bi, new_text, cursor_at, now);
+            // the commit doesn't change the text further, so the draft hash stays valid
+            self.slide_ed.key = hash_str(&self.buffers[bi].text);
+            self.slide_ed.deck = slides::parse_deck(&self.buffers[bi].text);
         }
         let _ = focused;
     }
@@ -1290,6 +1327,33 @@ mod tests {
         let mut t = "hello world".to_string();
         assert_eq!(wrap_sel(&mut t, (6, 11), "\\textbf{", "}"), (14, 19));
         assert_eq!(t, "hello \\textbf{world}");
+    }
+
+    #[test]
+    fn typing_keeps_spaces() {
+        // a slide with one list item; the user types "Hallo " (trailing space)
+        let src = "\\begin{document}\n\\begin{frame}{T}\n  \\begin{itemize}\n    \\item Hallo\n  \\end{itemize}\n\\end{frame}\n\\end{document}\n";
+        let mut ed = SlideEditor::default();
+        let deck = slides::parse_deck(src);
+        let mut s = ed.working_slide(0, hash_str(src), &deck.frames[0].slide);
+        if let Elem::List { items, .. } = &mut s.body[0] {
+            items[0].text.push(' ');
+        }
+        let f = &deck.frames[0];
+        let mut new_src = src.to_string();
+        new_src.replace_range(f.start..f.end, &slides::write_slide(&s));
+        // the source is clean …
+        assert!(new_src.contains("\\item Hallo\n"));
+        ed.remember(0, s.clone(), hash_str(&new_src));
+        // … but the next frame still shows the space
+        let reparsed = slides::parse_deck(&new_src);
+        let shown = ed.working_slide(0, hash_str(&new_src), &reparsed.frames[0].slide);
+        assert_eq!(shown, s);
+        // an outside change (code view) drops the draft
+        let other = new_src.replace("Hallo", "Servus");
+        let reparsed = slides::parse_deck(&other);
+        let shown = ed.working_slide(0, hash_str(&other), &reparsed.frames[0].slide);
+        assert_eq!(shown, reparsed.frames[0].slide);
     }
 
     #[test]

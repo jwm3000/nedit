@@ -556,7 +556,9 @@ fn write_elems(out: &mut String, elems: &[Elem], ind: &str) {
         first = matches!(e, Elem::Pause);
         match e {
             Elem::Text(t) => {
-                out.push_str(&format!("{ind}{}\n", t.trim()));
+                for l in t.trim().lines() {
+                    out.push_str(&format!("{ind}{}\n", l.trim()));
+                }
             }
             Elem::Pause => out.push_str(&format!("{ind}\\pause\n")),
             Elem::TitlePage => out.push_str(&format!("{ind}\\maketitle\n")),
