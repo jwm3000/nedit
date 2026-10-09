@@ -25,6 +25,19 @@ mod visual;
 mod widgets;
 mod workspace;
 
+/// Window icon (taskbar / title bar); on Linux the desktop file's icon is used as well.
+fn app_icon() -> egui::IconData {
+    let png = include_bytes!("../assets/nedit-256.png");
+    match image::load_from_memory(png) {
+        Ok(img) => {
+            let img = img.to_rgba8();
+            let (width, height) = img.dimensions();
+            egui::IconData { rgba: img.into_raw(), width, height }
+        }
+        Err(_) => egui::IconData::default(),
+    }
+}
+
 fn main() -> eframe::Result {
     updater::cleanup(); // also records our executable path before any update
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -52,7 +65,8 @@ fn main() -> eframe::Result {
             .with_app_id("nedit")
             .with_inner_size([1500.0, 920.0])
             .with_min_inner_size([900.0, 560.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(app_icon()),
         ..Default::default()
     };
     eframe::run_native("nEdit", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))

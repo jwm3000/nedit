@@ -1068,6 +1068,37 @@ impl eframe::App for App {
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
                 if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
+                    if name.contains("tabdrag") {
+                        // drag the first tab to the far right over ~14 frames (raw input, so egui sees real pointer events)
+                        let rects: Vec<(String, egui::Rect)> = ctx.data(|d| d.get_temp(egui::Id::new("dbg-tabrects"))).unwrap_or_default();
+                        if self.debug_typed < 4000 {
+                            self.debug_typed = 4000;
+                            eprintln!("TABDRAG before {:?}", self.thesis.tabs);
+                        }
+                        let k = self.debug_typed - 4000;
+                        let fixed_id = egui::Id::new("dbg-tabdrag-fixed");
+                        if k == 0 {
+                            if let (Some(first), Some(last)) = (rects.first(), rects.last()) {
+                                let start = first.1.center();
+                                ctx.data_mut(|d| d.insert_temp(fixed_id, (start, egui::pos2(last.1.max.x - 10.0, start.y))));
+                            }
+                        }
+                        let fixed: Option<(egui::Pos2, egui::Pos2)> = ctx.data(|d| d.get_temp(fixed_id));
+                        if let Some((start, end)) = fixed {
+                            let p = |f: f32| start + (end - start) * f;
+                            match k {
+                                0 => raw.events.push(egui::Event::PointerMoved(start)),
+                                1 => raw.events.push(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }),
+                                2..=13 => raw.events.push(egui::Event::PointerMoved(p((k - 1) as f32 / 12.0))),
+                                14 => raw.events.push(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }),
+                                16 => eprintln!("TABDRAG after {:?}", self.thesis.tabs),
+                                _ => {}
+                            }
+                            if k < 17 {
+                                self.debug_typed += 1;
+                            }
+                        }
+                    }
                     if name.contains("rawesc") && self.debug_typed != 1000 + self.shot_step {
                         self.debug_typed = 1000 + self.shot_step;
                         raw.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });

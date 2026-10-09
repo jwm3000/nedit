@@ -870,9 +870,15 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
         buf.sel_end = a;
         scroll_to_cursor = true;
     }
+    // Focus is requested only once no mouse button is pressed: a click elsewhere (file tree,
+    // quick open, tabs) would otherwise take the focus away again in the same frame.
     if buf.request_focus {
-        ctx.memory_mut(|m| m.request_focus(buf.id));
-        buf.request_focus = false;
+        if ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released()) {
+            ctx.request_repaint();
+        } else {
+            ctx.memory_mut(|m| m.request_focus(buf.id));
+            buf.request_focus = false;
+        }
     }
 
     let pal = st.pal;

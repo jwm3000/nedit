@@ -286,7 +286,6 @@ fn editor_area(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let strip = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover()).0;
     ui.painter().rect_filled(strip, 0.0, pal.mantle);
     ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, with_alpha(pal.border, 150)));
-    let mut x = strip.min.x + 6.0;
     let mut close: Option<String> = None;
     let mut activate: Option<String> = None;
     // tabs shrink (and names get truncated) when they don't fit
@@ -296,35 +295,109 @@ fn editor_area(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         .collect();
     let avail = strip.width() - 12.0;
     let total: f32 = natural.iter().sum::<f32>() + 2.0 * tabs.len() as f32;
-    let cap = if total > avail && !tabs.is_empty() { (avail / tabs.len() as f32 - 2.0).max(64.0) } else { f32::INFINITY };
-    for (ti, rel) in tabs.iter().enumerate() {
+    // always fit into the strip; very narrow tabs show only their icon
+    let cap = if total > avail && !tabs.is_empty() { (avail / tabs.len() as f32 - 2.0).max(34.0) } else { f32::INFINITY };
+    let width_of = |rel: &String| -> f32 { tabs.iter().position(|x| x == rel).map_or(80.0, |i| natural[i].min(cap)) };
+
+    // ── drag & drop reordering ──
+    let drag_id = ui.id().with(("tab-drag", t as u8));
+    // (dragged tab, grab offset inside the tab)
+    let mut drag: Option<(String, f32)> = ui.data(|d| d.get_temp(drag_id));
+    if drag.as_ref().is_some_and(|(r, _)| !tabs.contains(r)) {
+        drag = None;
+    }
+    let pointer_x = ui.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos())).map(|p| p.x);
+    // display order: while dragging, the dragged tab is inserted where the pointer is
+    let mut order: Vec<String> = tabs.clone();
+    let mut drag_x: Option<f32> = None;
+    if let (Some((rel, grab)), Some(px)) = (&drag, pointer_x) {
+        let w = width_of(rel);
+        let left = (px - grab).clamp(strip.min.x + 6.0, (strip.max.x - w - 6.0).max(strip.min.x + 6.0));
+        drag_x = Some(left);
+        let center = left + w / 2.0;
+        order.retain(|r| r != rel);
+        let mut x = strip.min.x + 6.0;
+        let mut idx = order.len();
+        for (k, r) in order.iter().enumerate() {
+            let wr = width_of(r);
+            if center < x + wr / 2.0 {
+                idx = k;
+                break;
+            }
+            x += wr + 2.0;
+        }
+        order.insert(idx, rel.clone());
+    }
+    // target x positions in display order (animated so tabs glide into place)
+    let mut xs: Vec<(String, f32)> = vec![];
+    let mut x = strip.min.x + 6.0;
+    for r in &order {
+        xs.push((r.clone(), x));
+        x += width_of(r) + 2.0;
+    }
+    let dragged_rel = drag.as_ref().map(|d| d.0.clone());
+    let mut drop_now = false;
+    let mut start_drag: Option<(String, f32)> = None;
+    let paint_order: Vec<&(String, f32)> = xs.iter().filter(|(r, _)| Some(r) != dragged_rel.as_ref()).chain(xs.iter().filter(|(r, _)| Some(r) == dragged_rel.as_ref())).collect();
+    for (rel, target_x) in paint_order {
+        let ti = tabs.iter().position(|x| x == rel).unwrap_or(0);
         let full = rel.rsplit('/').next().unwrap_or(rel).to_string();
         let w = natural[ti].min(cap);
-        let name = if w < natural[ti] { truncate(&full, (((w - 58.0) / 7.2).max(2.0)) as usize) } else { full.clone() };
+        let is_dragged = Some(rel) == dragged_rel.as_ref();
+        let anim_id = ui.id().with(("tab-x", t as u8, rel));
+        let x = if is_dragged {
+            let dx = drag_x.unwrap_or(*target_x);
+            ui.ctx().animate_value_with_time(anim_id, dx, 0.0)
+        } else {
+            ui.ctx().animate_value_with_time(anim_id, *target_x, 0.12)
+        };
+        let icon_only = w < 76.0;
+        let name = if icon_only { String::new() } else if w < natural[ti] { truncate(&full, (((w - 58.0) / 7.2).max(2.0)) as usize) } else { full.clone() };
         let g = ui.painter().layout_no_wrap(name.clone(), widgets::ui_font(13.0), pal.text);
         let r = Rect::from_min_size(pos2(x, strip.min.y + 6.0), vec2(w, 34.0));
-        let resp = ui.interact(r, ui.id().with(("tab", t as u8, rel)), Sense::click());
+        // interaction uses the resting slot so the drag source stays stable
+        let slot = Rect::from_min_size(pos2(*target_x, strip.min.y + 6.0), vec2(w, 34.0));
+        let resp = ui.interact(if is_dragged { r } else { slot }, ui.id().with(("tab", t as u8, rel)), Sense::click_and_drag());
+        if resp.drag_started() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                start_drag = Some((rel.clone(), p.x - slot.min.x));
+            }
+        }
+        if is_dragged && (resp.drag_stopped() || !ui.input(|i| i.pointer.any_down())) {
+            drop_now = true;
+        }
         let is_active = active.as_deref() == Some(rel.as_str());
         let p = ui.painter();
-        if is_active {
+        if is_dragged {
+            p.rect_filled(r.translate(vec2(0.0, 3.0)).expand(1.0), 9.0, with_alpha(Color32::BLACK, 60));
+            p.rect_filled(r, 8.0, pal.surface);
+            p.rect_stroke(r, 8.0, Stroke::new(1.0, with_alpha(pal.accent, 160)), StrokeKind::Inside);
+        } else if is_active {
             p.rect_filled(r, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, pal.base);
             p.rect_filled(Rect::from_min_size(r.min + vec2(10.0, 0.0), vec2(w - 20.0, 2.0)), 1.0, pal.accent);
-        } else if resp.hovered() {
+        } else if resp.hovered() && dragged_rel.is_none() {
             p.rect_filled(r.shrink2(vec2(0.0, 3.0)), 7.0, with_alpha(pal.text, 10));
         }
         let (icon, col) = crate::filetree::file_icon(&full, pal);
-        p.text(pos2(r.min.x + 16.0, r.center().y), Align2::CENTER_CENTER, icon, widgets::ui_font(11.5), if is_active { col } else { pal.dim });
+        let icon_x = if icon_only { r.center().x } else { r.min.x + 16.0 };
+        p.text(pos2(icon_x, r.center().y), Align2::CENTER_CENTER, icon, widgets::ui_font(11.5), if is_active || is_dragged { col } else { pal.dim });
         let gs = app.git_letter(rel);
         let name_col = match gs {
             Some(c) => mix(widgets::git_color(c, pal), if is_active { pal.bright } else { pal.subtext }, 0.35),
-            None if is_active => pal.bright,
+            None if is_active || is_dragged => pal.bright,
             None => pal.subtext,
         };
         p.galley(pos2(r.min.x + 28.0, r.center().y - g.size().y / 2.0), g, name_col);
-        let cr = Rect::from_center_size(pos2(r.max.x - 15.0, r.center().y), vec2(18.0, 18.0));
-        let cresp = ui.interact(cr, ui.id().with(("tabclose", t as u8, rel)), Sense::click());
+        let cr = if icon_only { Rect::from_center_size(pos2(r.max.x - 7.0, r.min.y + 8.0), vec2(12.0, 12.0)) } else { Rect::from_center_size(pos2(r.max.x - 15.0, r.center().y), vec2(18.0, 18.0)) };
         let dirty = app.buffer_idx(rel).is_some_and(|i| app.buffers[i].dirty());
-        if cresp.hovered() || (resp.hovered() && !dirty) {
+        if is_dragged {
+            if dirty {
+                ui.painter().circle_filled(cr.center(), 3.5, pal.yellow);
+            }
+            continue;
+        }
+        let cresp = ui.interact(cr, ui.id().with(("tabclose", t as u8, rel)), Sense::click());
+        if dragged_rel.is_none() && (cresp.hovered() || (resp.hovered() && !dirty)) {
             if cresp.hovered() {
                 ui.painter().rect_filled(cr, 4.0, with_alpha(pal.text, 20));
             }
@@ -332,13 +405,29 @@ fn editor_area(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         } else if dirty {
             ui.painter().circle_filled(cr.center(), 3.5, pal.yellow);
         }
-        let resp = resp.on_hover_text(rel.as_str());
-        if cresp.clicked() || resp.middle_clicked() {
-            close = Some(rel.clone());
-        } else if resp.clicked() {
-            activate = Some(rel.clone());
+        if dragged_rel.is_none() {
+            let resp = resp.on_hover_text(rel.as_str());
+            if cresp.clicked() || resp.middle_clicked() {
+                close = Some(rel.clone());
+            } else if resp.clicked() {
+                activate = Some(rel.clone());
+            }
         }
-        x += w + 2.0;
+    }
+    if std::env::var_os("NEDIT_SHOT").is_some() {
+        let rects: Vec<(String, Rect)> = xs.iter().map(|(r, x)| (r.clone(), Rect::from_min_size(pos2(*x, strip.min.y + 6.0), vec2(width_of(r), 34.0)))).collect();
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("dbg-tabrects"), rects));
+    }
+    if let Some(sd) = start_drag {
+        activate = Some(sd.0.clone());
+        ui.data_mut(|d| d.insert_temp(drag_id, sd));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if drop_now {
+        app.ws_mut(t).tabs = order.clone();
+        ui.data_mut(|d| d.remove::<(String, f32)>(drag_id));
+    } else if dragged_rel.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        ui.ctx().request_repaint();
     }
     if let Some(r) = close {
         app.close_tab(&r, t);
