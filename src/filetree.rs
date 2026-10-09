@@ -740,6 +740,8 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
                 ui.close();
             }
         }
+        git_menu(app, ui, pal, n, now);
+        ui.separator();
         if ui.button(format!("{}  Umbenennen   F2", ic::PENCIL)).clicked() {
             app.begin_rename(&n.rel);
             ui.close();
@@ -765,5 +767,41 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
         for c in &n.children {
             tree_node(app, ui, pal, c, depth + 1, active, t, now, os_drag);
         }
+    }
+}
+
+/// "Git" part of the file tree context menu.
+fn git_menu(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, now: f64) {
+    ui.separator();
+    ui.label(egui::RichText::new("GIT").font(widgets::ui_font(10.0)).color(pal.dim).extra_letter_spacing(1.2));
+    if !app.git.git_available {
+        ui.label(egui::RichText::new("git ist nicht installiert").color(pal.dim));
+        return;
+    }
+    if !app.git.is_repo {
+        if ui.button(format!("{}  Git-Repository anlegen", ic::PLUS)).clicked() {
+            app.git_init(now);
+            ui.close();
+        }
+        return;
+    }
+    let changes = app.git.changes_under(&n.rel);
+    if changes.is_empty() {
+        ui.add_enabled(false, egui::Button::new(format!("{}  Keine Änderungen seit dem letzten Commit", ic::CHECK)));
+        return;
+    }
+    if !n.is_dir {
+        if ui.button(format!("{}  Änderungen anzeigen", ic::EYE)).clicked() {
+            app.save_all();
+            let root = app.project.root.clone();
+            app.git.open_working_diff(&root, &n.rel);
+            app.side = crate::app::SideMode::Git;
+            ui.close();
+        }
+    }
+    let label = if n.is_dir { format!("{}  Änderungen im Ordner verwerfen ({}) …", ic::UNDO, changes.len()) } else { format!("{}  Änderungen verwerfen …", ic::UNDO) };
+    if ui.button(egui::RichText::new(label).color(pal.red)).clicked() {
+        app.dialog = Some(Dialog::GitRevert { paths: vec![n.rel.clone()] });
+        ui.close();
     }
 }

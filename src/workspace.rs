@@ -1484,19 +1484,7 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             ui.label(egui::RichText::new("Mit Git sicherst du jeden Stand deiner Arbeit und kannst jederzeit zu früheren Versionen zurück.").font(widgets::ui_font(12.0)).color(pal.subtext));
             ui.add_space(10.0);
             if widgets::button(ui, ic::PLUS, "Repository anlegen", pal, BtnKind::Primary).clicked() {
-                app.save_all();
-                match app.git.init(&root) {
-                    Ok(()) => {
-                        let g = pal.green;
-                        app.toast(ic::GIT, "Git-Repository angelegt – erste Version gesichert", g, now);
-                    }
-                    Err(e) => {
-                        let r = pal.red;
-                        app.toast(ic::WARN, format!("Git: {e}"), r, now);
-                    }
-                }
-                app.git.refresh(&root, now);
-                app.refresh_tree();
+                app.git_init(now);
             }
         });
         return;
@@ -1552,8 +1540,14 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         let n_sel = n - app.git.excluded.len().min(n);
         ui.horizontal(|ui| {
             widgets::section_label(ui, &format!("Änderungen ({n})"), pal);
-            if n > 1 {
+            if n > 0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::icon_button_sized(ui, ic::UNDO, "Alle Änderungen verwerfen …", pal, false, 22.0).clicked() {
+                        app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![String::new()] });
+                    }
+                    if n < 2 {
+                        return;
+                    }
                     let all = app.git.excluded.is_empty();
                     if ui.add(egui::Label::new(egui::RichText::new(if all { "Alle abwählen" } else { "Alle auswählen" }).font(widgets::ui_font(11.0)).color(pal.accent)).sense(Sense::click())).clicked() {
                         if all {
@@ -1618,7 +1612,7 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
                     ui.close();
                 }
                 if ui.button(egui::RichText::new(format!("{}  Änderungen verwerfen", ic::UNDO)).color(pal.red)).clicked() {
-                    app.dialog = Some(crate::app::Dialog::GitDiscard { path: c.path.clone() });
+                    app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![c.path.clone()] });
                     ui.close();
                 }
             });
@@ -1719,7 +1713,7 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         }
         if let crate::git::GitView::WorkingFile(p) = &view {
             if widgets::button(ui, ic::UNDO, "Verwerfen", pal, BtnKind::Danger).clicked() {
-                app.dialog = Some(crate::app::Dialog::GitDiscard { path: p.clone() });
+                app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![p.clone()] });
             }
             if crate::project::is_text_file(p) && widgets::button(ui, ic::FILE_TEXT, "Öffnen", pal, BtnKind::Secondary).clicked() {
                 let p = p.clone();

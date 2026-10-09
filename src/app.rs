@@ -149,7 +149,8 @@ pub enum Dialog {
     Delete { rel: String },
     NewProject { name: String },
     GitRestore { hash: String, path: String },
-    GitDiscard { path: String },
+    /// Revert changes of these paths (files or folders, "" = everything) to the last commit.
+    GitRevert { paths: Vec<String> },
     Update,
 }
 
@@ -387,6 +388,77 @@ impl App {
         if old != self.flat {
             self.git.invalidate();
         }
+    }
+
+    /// After git changed files on disk: open editors take the disk version (unsaved edits are
+    /// discarded on purpose); files that no longer exist are closed.
+    pub fn sync_buffers_with_disk(&mut self, paths: &[String]) {
+        let mut gone = vec![];
+        for p in paths {
+            if let Some(i) = self.buffer_idx(p) {
+                if self.project.root.join(p).exists() {
+                    self.buffers[i].force_reload();
+                } else {
+                    gone.push(p.clone());
+                }
+            }
+        }
+        for p in gone {
+            for t in [Tab::Thesis, Tab::Slides] {
+                let ws = self.ws_mut(t);
+                if let Some(pos) = ws.tabs.iter().position(|x| *x == p) {
+                    ws.tabs.remove(pos);
+                    if ws.active.as_deref() == Some(p.as_str()) {
+                        ws.active = ws.tabs.get(pos.min(ws.tabs.len().saturating_sub(1))).cloned();
+                    }
+                }
+            }
+            self.buffers.retain(|b| b.rel != p);
+        }
+    }
+
+    /// Revert files/folders to the last commit and update everything that shows them.
+    pub fn git_revert(&mut self, paths: &[String], now: f64) {
+        let root = self.project.root.clone();
+        // make sure the change list is current before deciding what to revert
+        self.git.refresh_status(&root, now);
+        match self.git.revert(&root, paths) {
+            Ok(affected) => {
+                self.sync_buffers_with_disk(&affected);
+                let g = self.pal.green;
+                self.toast(ic::UNDO, format!("{} Datei(en) zurückgesetzt", affected.len()), g, now);
+            }
+            Err(e) => {
+                let r = self.pal.red;
+                self.toast(ic::WARN, format!("Git: {}", truncate(&e, 90)), r, now);
+            }
+        }
+        if let Some(crate::git::GitView::WorkingFile(p)) = &self.git.view {
+            if !self.git.changes.iter().any(|c| &c.path == p) || paths.iter().any(|x| x.is_empty() || p == x || p.starts_with(&format!("{x}/"))) {
+                self.git.view = None;
+            }
+        }
+        self.git.refresh(&root, now);
+        self.refresh_tree();
+        self.rebuild_indexes();
+    }
+
+    /// Create the git repository for this project.
+    pub fn git_init(&mut self, now: f64) {
+        let root = self.project.root.clone();
+        self.save_all();
+        match self.git.init(&root) {
+            Ok(()) => {
+                let g = self.pal.green;
+                self.toast(ic::GIT, "Git-Repository angelegt – erste Version gesichert", g, now);
+            }
+            Err(e) => {
+                let r = self.pal.red;
+                self.toast(ic::WARN, format!("Git: {e}"), r, now);
+            }
+        }
+        self.git.refresh(&root, now);
+        self.refresh_tree();
     }
 
     /// Git status letter for display; open files with unsaved edits show "M" right away.
@@ -1343,9 +1415,7 @@ impl App {
                                         app.toast(ic::WARN, e, r, now);
                                     }
                                 }
-                                for b in &mut app.buffers {
-                                    b.reload_if_changed();
-                                }
+                                app.sync_buffers_with_disk(std::slice::from_ref(&path));
                                 app.git.refresh(&root, now);
                             }));
                             close = true;
@@ -1355,33 +1425,49 @@ impl App {
                         }
                     });
                 }
-                Dialog::GitDiscard { path } => {
+                Dialog::GitRevert { paths } => {
+                    let files: Vec<crate::git::Change> = {
+                        let mut v: Vec<crate::git::Change> = paths.iter().flat_map(|p| self.git.changes_under(p)).collect();
+                        v.sort_by(|a, b| a.path.cmp(&b.path));
+                        v.dedup_by(|a, b| a.path == b.path);
+                        v
+                    };
                     ui.label(egui::RichText::new("Änderungen verwerfen?").font(widgets::display_font(20.0)).color(pal.bright));
                     ui.add_space(6.0);
-                    ui.label(format!("Alle seit dem letzten Commit gemachten Änderungen an „{path}“ gehen verloren."));
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if widgets::button(ui, ic::TRASH, "Verwerfen", pal, BtnKind::Danger).clicked() {
-                            let path = path.clone();
-                            action = Some(Box::new(move |app: &mut App| {
-                                let root = app.project.root.clone();
-                                if let Err(e) = app.git.discard_file(&root, &path) {
-                                    let r = app.pal.red;
-                                    app.toast(ic::WARN, e, r, 0.0);
-                                }
-                                for b in &mut app.buffers {
-                                    b.reload_if_changed();
-                                }
-                                app.git.view = None;
-                                app.git.refresh(&root, 0.0);
-                                app.refresh_tree();
-                            }));
+                    if files.is_empty() {
+                        ui.label(egui::RichText::new("Hier gibt es keine Änderungen seit dem letzten Commit.").color(pal.subtext));
+                        ui.add_space(10.0);
+                        if widgets::button(ui, "", "Schließen", pal, BtnKind::Ghost).clicked() {
                             close = true;
                         }
-                        if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
-                            close = true;
-                        }
-                    });
+                    } else {
+                        ui.label(format!("{} Datei(en) werden auf den Stand des letzten Commits zurückgesetzt. Neue Dateien werden gelöscht – auch in geöffneten Editoren.", files.len()));
+                        ui.add_space(8.0);
+                        egui::Frame::new().fill(pal.base).corner_radius(8).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                for c in &files {
+                                    let (label, letter) = c.label();
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(letter.to_string()).font(widgets::mono_font(12.0)).color(widgets::git_color(letter, pal)));
+                                        ui.label(egui::RichText::new(&c.path).font(widgets::ui_font(12.5)).color(pal.text));
+                                        ui.label(egui::RichText::new(label).font(widgets::ui_font(11.0)).color(pal.dim));
+                                    });
+                                }
+                            });
+                        });
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if widgets::button(ui, ic::UNDO, "Verwerfen", pal, BtnKind::Danger).clicked() {
+                                let paths = paths.clone();
+                                action = Some(Box::new(move |app: &mut App| app.git_revert(&paths, now)));
+                                close = true;
+                            }
+                            if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
                 }
                 Dialog::Update => {
                     let up = &mut self.updater;
@@ -1719,6 +1805,23 @@ impl App {
                     });
                 });
             });
+        }
+        if name.contains("revtest") && self.debug_typed != 777 {
+            self.debug_typed = 777;
+            let rel = "kapitel/fazit.tex".to_string();
+            self.open_file(&rel, Tab::Thesis);
+            let disk = std::fs::read_to_string(self.project.root.join(&rel)).unwrap_or_default();
+            if let Some(i) = self.buffer_idx(&rel) {
+                self.buffers[i].text.push_str("\nUNGESPEICHERTE ÄNDERUNG\n");
+                eprintln!("REVTEST dirty before={}", self.buffers[i].dirty());
+            }
+            // also a saved change so git sees the file as modified
+            let _ = std::fs::write(self.project.root.join(&rel), format!("{disk}\nGESPEICHERTE ÄNDERUNG\n"));
+            self.git_revert(&[rel.clone()], now);
+            if let Some(i) = self.buffer_idx(&rel) {
+                let b = &self.buffers[i];
+                eprintln!("REVTEST after: dirty={} has_unsaved={} has_saved={} equals_head={}", b.dirty(), b.text.contains("UNGESPEICHERTE"), b.text.contains("GESPEICHERTE ÄNDERUNG"), b.text == disk);
+            }
         }
         if name.contains("about") {
             self.about_open = true;

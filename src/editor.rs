@@ -112,6 +112,22 @@ impl Buffer {
         false
     }
 
+    /// Replace the buffer with the file on disk, discarding unsaved edits
+    /// (used after git revert/restore so autosave can't write old text back).
+    pub fn force_reload(&mut self) -> bool {
+        match std::fs::read_to_string(&self.abs) {
+            Ok(t) => {
+                self.set_text_external(t.replace("\r\n", "\n"));
+                self.completion = None;
+                self.hl_cache = None;
+                self.vis_cache = None;
+                self.search_cache = None;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     pub fn set_text_external(&mut self, t: String) {
         self.text = t;
         self.saved_hash = hash_str(&self.text);

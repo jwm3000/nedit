@@ -367,12 +367,54 @@ impl GitState {
         git(root, &["checkout", hash, "--", path]).map(|_| ())
     }
 
-    pub fn discard_file(&self, root: &Path, path: &str) -> Result<(), String> {
-        if self.changes.iter().any(|c| c.path == path && c.code == "??") {
-            std::fs::remove_file(root.join(path)).map_err(|e| e.to_string())
-        } else {
-            git(root, &["checkout", "HEAD", "--", path]).map(|_| ())
+    /// Changed files at or below `path` ("" = whole project).
+    pub fn changes_under(&self, path: &str) -> Vec<Change> {
+        let pre = format!("{}/", path.trim_end_matches('/'));
+        self.changes.iter().filter(|c| path.is_empty() || c.path == path || c.path.starts_with(&pre)).cloned().collect()
+    }
+
+    /// Revert files to the last commit. Untracked/new files are deleted.
+    /// Returns the affected paths (so open editors can be updated).
+    pub fn revert(&self, root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+        let mut affected = vec![];
+        let mut errors = vec![];
+        let mut seen = std::collections::HashSet::new();
+        for p in paths {
+            for c in self.changes_under(p) {
+                if !seen.insert(c.path.clone()) {
+                    continue;
+                }
+                let code = c.code.trim();
+                let r = if code == "??" {
+                    std::fs::remove_file(root.join(&c.path)).map_err(|e| e.to_string())
+                } else if c.code.starts_with('A') {
+                    // newly added (staged) file: unstage and delete
+                    git(root, &["reset", "-q", "--", &c.path]).and_then(|_| std::fs::remove_file(root.join(&c.path)).map_err(|e| e.to_string()))
+                } else {
+                    git(root, &["reset", "-q", "--", &c.path]).ok();
+                    git(root, &["checkout", "HEAD", "--", &c.path]).map(|_| ())
+                };
+                match r {
+                    Ok(()) => affected.push(c.path.clone()),
+                    Err(e) => errors.push(format!("{}: {e}", c.path)),
+                }
+            }
         }
+        // remove folders that became empty through deleting new files
+        for a in &affected {
+            let mut dir = root.join(a);
+            while dir.pop() && dir.starts_with(root) && dir != root {
+                if std::fs::read_dir(&dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                    let _ = std::fs::remove_dir(&dir);
+                } else {
+                    break;
+                }
+            }
+        }
+        if !errors.is_empty() && affected.is_empty() {
+            return Err(errors.join("; "));
+        }
+        Ok(affected)
     }
 }
 
@@ -499,6 +541,28 @@ mod tests {
         assert_eq!(g.file_status("main.tex"), Some('M'));
         let m = g.line_marks(&root, "main.tex", 1);
         assert!(m.iter().any(|x| x.kind == MarkKind::Added && x.start == 2), "{m:?}");
+        // revert: modified + untracked file in a new folder + staged new file + deleted file
+        std::fs::write(root.join("a.tex"), "A\n").unwrap();
+        git(&root, &["add", "a.tex"]).unwrap();
+        git(&root, &["commit", "-qm", "a"]).unwrap();
+        std::fs::write(root.join("main.tex"), "kaputt\n").unwrap();
+        std::fs::create_dir_all(root.join("neu")).unwrap();
+        std::fs::write(root.join("neu/x.tex"), "x").unwrap();
+        std::fs::write(root.join("staged.tex"), "s").unwrap();
+        git(&root, &["add", "staged.tex"]).unwrap();
+        std::fs::remove_file(root.join("a.tex")).unwrap();
+        g.refresh(&root, 0.0);
+        assert_eq!(g.changes.len(), 4, "{:?}", g.changes);
+        let affected = g.revert(&root, &["neu".to_string()]).unwrap();
+        assert_eq!(affected, vec!["neu/x.tex".to_string()]);
+        assert!(!root.join("neu").exists(), "empty folder removed");
+        g.refresh(&root, 0.0);
+        let affected = g.revert(&root, &[String::new()]).unwrap();
+        assert_eq!(affected.len(), 3);
+        g.refresh(&root, 0.0);
+        assert!(g.changes.is_empty(), "{:?}", g.changes);
+        assert!(root.join("a.tex").exists() && !root.join("staged.tex").exists());
+        assert_eq!(std::fs::read_to_string(root.join("main.tex")).unwrap().replace("\r\n", "\n"), "Version 2\n");
         GitState::restore_file(&root, &first, "main.tex").unwrap();
         // git may convert line endings on Windows (core.autocrlf)
         assert_eq!(std::fs::read_to_string(root.join("main.tex")).unwrap().replace("\r\n", "\n"), "Version 1\n");
