@@ -1348,7 +1348,7 @@ impl VimState {
         if self.last_set != Some(sel) {
             if self.mode == Mode::Insert {
                 self.pos = buf.cursor;
-            } else if sel.1 > sel.0 + 1 {
+            } else if sel.1 > sel.0 {
                 self.mode = Mode::Visual;
                 self.anchor = buf.sel_end;
                 self.pos = buf.cursor.saturating_sub(if buf.cursor > buf.sel_end { 1 } else { 0 });
@@ -1446,13 +1446,7 @@ impl VimState {
         self.pos = self.pos.min(c.len());
         let want = match self.mode {
             Mode::Insert => (self.pos, self.pos),
-            Mode::Normal => {
-                if self.pos < c.len() && c[self.pos] != '\n' {
-                    (self.pos, self.pos + 1)
-                } else {
-                    (self.pos, self.pos)
-                }
-            }
+            Mode::Normal => (self.pos, self.pos),
             Mode::Visual | Mode::VisualLine => {
                 let (a, b) = self.vrange(&c);
                 (a, b)
@@ -1477,6 +1471,14 @@ impl VimState {
             }
         }
         out
+    }
+
+    /// Where to draw the block cursor (None = at the live TextEdit cursor, i.e. Insert).
+    pub fn block_pos(&self) -> Option<usize> {
+        match self.mode {
+            Mode::Insert => None,
+            _ => Some(self.pos),
+        }
     }
 
     /// Text for the status bar: mode, pending keys, message.

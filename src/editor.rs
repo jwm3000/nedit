@@ -25,6 +25,8 @@ pub struct Buffer {
     vis_cache: Option<(u64, Vec<crate::visual::Span>, Vec<crate::visual::Decor>)>,
     search_cache: Option<(u64, String, Vec<(usize, usize)>)>,
     search_pulse: (usize, f64),
+    /// Vim block cursor: Some(Some(pos)) fixed position, Some(None) = at the live cursor.
+    pub vim_block: Option<Option<usize>>,
     pub doc_height: f32,
     pub last_edit: f64,
     pub completion: Option<Completion>,
@@ -67,6 +69,7 @@ impl Buffer {
             vis_cache: None,
             search_cache: None,
             search_pulse: (usize::MAX, 0.0),
+            vim_block: None,
             doc_height: 0.0,
             last_edit: 0.0,
             completion: None,
@@ -749,8 +752,15 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
                 }
             });
             vim_normal = v.mode != crate::vim::Mode::Insert;
+            buf.vim_block = Some(v.block_pos());
             out.vim = Some(vo);
         }
+    }
+    if vim.is_none() {
+        buf.vim_block = None;
+    } else if !has_focus {
+        // keep showing the block where we left off
+        buf.vim_block = buf.vim_block.map(|b| b.or(Some(buf.cursor)));
     }
 
     // ── key handling before the TextEdit sees the events ──
@@ -1048,6 +1058,12 @@ fn editor_core(
         egui::Margin { left: gutter as i8, right: 16, top: 12, bottom: 40 }
     };
     let font = if visual { FontId::new(vsize, FontFamily::Name("serif".into())) } else { FontId::new(st.font_size, FontFamily::Monospace) };
+    let vim_block = buf.vim_block;
+    if vim_block.is_some() {
+        // vim: we draw our own solid block cursor
+        ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
+        ui.visuals_mut().text_cursor.blink = false;
+    }
     let output = egui::TextEdit::multiline(text)
         .id(id)
         .font(font)
@@ -1274,6 +1290,34 @@ fn editor_core(
                 let ty = clip.min.y + 4.0 + f * (clip.height() - 8.0);
                 let tr = Rect::from_center_size(pos2(clip.max.x - 5.0, ty), vec2(if is_cur { 8.0 } else { 6.0 }, if is_cur { 4.0 } else { 3.0 }));
                 painter.rect_filled(tr, 1.5, if is_cur { pal.accent } else { with_alpha(hit, 210) });
+            }
+        }
+    }
+
+    // ── vim block cursor ──
+    if let Some(block) = vim_block {
+        let p = block.unwrap_or_else(|| output.cursor_range.map(|r| r.primary.index.0).unwrap_or(buf.cursor));
+        let chars: Vec<char> = buf.text.chars().skip(p).take(1).collect();
+        let ch = chars.first().copied().filter(|c| *c != '\n');
+        let r0 = galley.pos_from_cursor(CCursor::new(p)).translate(gpos.to_vec2());
+        let mut w = st.font_size * 0.6;
+        if ch.is_some() {
+            let r1 = galley.pos_from_cursor(CCursor { index: (p + 1).into(), prefer_next_row: false }).translate(gpos.to_vec2());
+            if (r1.min.y - r0.min.y).abs() < 1.0 && r1.min.x > r0.min.x {
+                w = r1.min.x - r0.min.x;
+            }
+        }
+        let rect = Rect::from_min_size(r0.min, vec2(w.max(2.0), r0.height()));
+        if rect.intersects(clip) {
+            let focused = ui.ctx().memory(|m| m.has_focus(buf.id));
+            if focused {
+                painter.rect_filled(rect, 2.0, pal.accent);
+                if let Some(c) = ch {
+                    let f = if visual { FontId::new(vsize, FontFamily::Name("serif".into())) } else { FontId::new(st.font_size, FontFamily::Monospace) };
+                    painter.text(pos2(rect.min.x, rect.center().y), egui::Align2::LEFT_CENTER, c.to_string(), f, pal.on_accent);
+                }
+            } else {
+                painter.rect_stroke(rect, 2.0, Stroke::new(1.5, with_alpha(pal.accent, 200)), egui::StrokeKind::Inside);
             }
         }
     }

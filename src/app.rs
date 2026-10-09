@@ -220,6 +220,7 @@ pub struct App {
     update_started: bool,
     pub close_requested: bool,
     pub vim: crate::vim::VimState,
+    pub about_open: bool,
 }
 
 impl App {
@@ -289,6 +290,7 @@ impl App {
             update_started: false,
             close_requested: false,
             vim: Default::default(),
+            about_open: false,
         };
         crate::updater::cleanup();
         app.apply_style(&cc.egui_ctx);
@@ -923,6 +925,36 @@ pub fn truncate(s: &str, n: usize) -> String {
 // ───────────────────────────── frame ─────────────────────────────
 
 impl eframe::App for App {
+    /// egui drops keyboard focus on a plain Esc before any widget sees it. In vim mode we
+    /// tag that Esc (harmless modifier) so the editor keeps focus and gets Normal mode.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // screenshot runs: a step named "...rawesc..." sends a real, unmodified Esc once
+        if let Ok(spec) = std::env::var("NEDIT_SHOT") {
+            if let Some((_, steps)) = spec.split_once(':') {
+                if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
+                    if name.contains("rawesc") && self.debug_typed != 1000 + self.shot_step {
+                        self.debug_typed = 1000 + self.shot_step;
+                        raw.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+                    }
+                }
+            }
+        }
+        if !self.settings.input_vim {
+            return;
+        }
+        let focused = ctx.memory(|m| m.focused());
+        if !focused.is_some_and(|f| self.buffers.iter().any(|b| b.id == f)) {
+            return;
+        }
+        for e in &mut raw.events {
+            if let egui::Event::Key { key: egui::Key::Escape, modifiers, .. } = e {
+                if modifiers.is_none() {
+                    modifiers.mac_cmd = true;
+                }
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
@@ -944,6 +976,7 @@ impl eframe::App for App {
         if self.focus && self.tab == Tab::Thesis {
             crate::workspace::focus_ui(self, ui, now);
             self.dialogs(&ctx, &pal, now);
+            self.about_window(&ctx, &pal);
             self.draw_toasts(&ctx, &pal, now);
             return;
         }
@@ -961,6 +994,7 @@ impl eframe::App for App {
             self.last_doc_tab = self.tab;
         }
         self.dialogs(&ctx, &pal, now);
+        self.about_window(&ctx, &pal);
         self.draw_toasts(&ctx, &pal, now);
     }
 }
@@ -1061,7 +1095,7 @@ impl App {
                             }
                             ui.horizontal(|ui| {
                                 ui.label("Schriftgröße");
-                                if ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=24.0).step_by(0.5)).changed() {
+                                if widgets::fancy_slider(ui, &mut self.settings.font_size, 10.0, 24.0, 0.5, "pt", pal).changed() {
                                     self.settings.save();
                                 }
                             });
@@ -1086,23 +1120,10 @@ impl App {
                                     changed |= ui.selectable_value(&mut self.project.config.slides_engine, e.to_string(), e).changed();
                                 }
                             });
-                            widgets::section_label(ui, "Über nEdit", pal);
-                            egui::Frame::new().fill(pal.base).corner_radius(8).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), egui::Sense::hover());
-                                    ui.painter().rect_filled(r, 7.0, pal.accent);
-                                    ui.painter().text(r.center() + vec2(0.0, -1.0), Align2::CENTER_CENTER, "∂", widgets::display_font(18.0), pal.on_accent);
-                                    ui.vertical(|ui| {
-                                        ui.label(egui::RichText::new(format!("nEdit {}", crate::updater::VERSION)).font(widgets::bold_font(13.5)).color(pal.bright));
-                                        ui.label(egui::RichText::new("LaTeX Studio").font(widgets::ui_font(11.0)).color(pal.dim));
-                                    });
-                                });
-                                ui.add_space(6.0);
-                                ui.label(egui::RichText::new("Erstellt von Norbert Winter – zur Motivation, die Masterarbeit endlich fertigzustellen.").font(widgets::ui_font(12.5)).italics().color(pal.text));
-                                ui.add_space(4.0);
-                                ui.hyperlink_to(egui::RichText::new(format!("{}  github.com/jwm3000/nedit", ic::GLOBE)).font(widgets::ui_font(11.5)), "https://github.com/jwm3000/nedit");
-                            });
+                            if ui.button(format!("{}  Über nEdit …", ic::GRADUATION)).clicked() {
+                                self.about_open = true;
+                                ui.close();
+                            }
                             widgets::section_label(ui, "Updates", pal);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Version {}", crate::updater::VERSION)).color(pal.subtext));
@@ -1474,6 +1495,62 @@ impl App {
         let _ = now;
     }
 
+    /// Movable "Über nEdit" window.
+    fn about_window(&mut self, ctx: &egui::Context, pal: &Palette) {
+        if !self.about_open {
+            return;
+        }
+        let mut open = true;
+        let screen = ctx.content_rect();
+        egui::Window::new(egui::RichText::new("Über nEdit").font(widgets::ui_font(13.0)).color(pal.text))
+            .id(egui::Id::new("about-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .movable(true)
+            .pivot(Align2::CENTER_CENTER)
+            .default_pos(screen.center())
+            .frame(
+                egui::Frame::new()
+                    .fill(pal.surface)
+                    .stroke(Stroke::new(1.0, pal.border))
+                    .corner_radius(14)
+                    .inner_margin(egui::Margin::same(22))
+                    .shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: with_alpha(Color32::BLACK, 120) }),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.vertical_centered(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(84.0, 84.0), egui::Sense::hover());
+                    ui.painter().rect_filled(r.translate(vec2(0.0, 4.0)), 22.0, with_alpha(pal.accent, 50));
+                    ui.painter().rect_filled(r, 22.0, pal.accent);
+                    ui.painter().text(r.center() + vec2(0.0, -3.0), Align2::CENTER_CENTER, "∂", widgets::display_font(58.0), pal.on_accent);
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new("nEdit").font(widgets::display_font(30.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(format!("LaTeX Studio  ·  Version {}", crate::updater::VERSION)).font(widgets::ui_font(12.5)).color(pal.dim));
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new("Erstellt von Norbert Winter – zur Motivation, die Masterarbeit endlich fertigzustellen.")
+                            .font(widgets::FontIdExt::serif(17.0))
+                            .italics()
+                            .color(pal.text),
+                    );
+                    ui.add_space(16.0);
+                    ui.painter().line_segment(
+                        [pos2(ui.max_rect().center().x - 30.0, ui.cursor().min.y), pos2(ui.max_rect().center().x + 30.0, ui.cursor().min.y)],
+                        Stroke::new(1.5, pal.accent),
+                    );
+                    ui.add_space(14.0);
+                    ui.hyperlink_to(egui::RichText::new(format!("{}  github.com/jwm3000/nedit", ic::GLOBE)).font(widgets::ui_font(12.5)), "https://github.com/jwm3000/nedit");
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("MIT-Lizenz  ·  Rust & egui  ·  Icons: Nerd Fonts").font(widgets::ui_font(11.0)).color(pal.dim));
+                });
+            });
+        if !open {
+            self.about_open = false;
+        }
+    }
+
     fn draw_toasts(&mut self, ctx: &egui::Context, pal: &Palette, now: f64) {
         self.toasts.retain(|t| now - t.t0 < 4.5);
         if self.toasts.is_empty() {
@@ -1630,6 +1707,21 @@ impl App {
         }
         if name.contains("doc") && !self.doc_mode {
             self.doc_mode = true;
+        }
+        if name.contains("slider") {
+            let id = egui::Id::new("debug-slider");
+            egui::Area::new(id).fixed_pos(pos2(200.0, 200.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Schriftgröße");
+                        let mut v = self.settings.font_size;
+                        widgets::fancy_slider(ui, &mut v, 10.0, 24.0, 0.5, "pt", &self.pal.clone());
+                    });
+                });
+            });
+        }
+        if name.contains("about") {
+            self.about_open = true;
         }
         if name.contains("narrow") {
             self.settings.doc_width = 520.0;

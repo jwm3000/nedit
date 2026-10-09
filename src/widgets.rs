@@ -239,3 +239,53 @@ pub fn git_color(c: char, pal: &Palette) -> Color32 {
         _ => crate::theme::mix(pal.yellow, pal.orange, 0.35),
     }
 }
+
+/// A clearly visible slider: track line, accent fill, round knob, value label.
+pub fn fancy_slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32, step: f32, unit: &str, pal: &Palette) -> Response {
+    let w = 170.0;
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(w + 58.0, 26.0), Sense::click_and_drag());
+    let track = Rect::from_min_max(pos2(rect.min.x + 8.0, rect.center().y - 2.0), pos2(rect.min.x + w - 8.0, rect.center().y + 2.0));
+    if resp.dragged() || resp.clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let t = ((p.x - track.min.x) / track.width()).clamp(0.0, 1.0);
+            let v = ((min + t * (max - min)) / step).round() * step;
+            if (v - *value).abs() > f32::EPSILON {
+                *value = v.clamp(min, max);
+                resp.mark_changed();
+            }
+        }
+    }
+    if resp.hovered() {
+        let d = ui.input(|i| i.smooth_scroll_delta.y);
+        if d.abs() > 0.5 {
+            *value = (*value + step * d.signum()).clamp(min, max);
+            resp.mark_changed();
+        }
+    }
+    let t = ((*value - min) / (max - min)).clamp(0.0, 1.0);
+    let kx = track.min.x + t * track.width();
+    let p = ui.painter();
+    // tick marks every whole unit
+    let mut v = min.ceil();
+    while v <= max {
+        let x = track.min.x + (v - min) / (max - min) * track.width();
+        let major = (v as i32) % 2 == 0;
+        p.line_segment([pos2(x, track.max.y + 4.0), pos2(x, track.max.y + if major { 8.0 } else { 6.0 })], Stroke::new(1.0, with_alpha(pal.dim, if major { 160 } else { 90 })));
+        v += 1.0;
+    }
+    p.rect_filled(track, 2.0, mix(pal.base, pal.text, 0.18));
+    p.rect_filled(Rect::from_min_max(track.min, pos2(kx, track.max.y)), 2.0, pal.accent);
+    let active = resp.hovered() || resp.dragged();
+    let r = if resp.dragged() { 9.0 } else if active { 8.0 } else { 7.0 };
+    p.circle_filled(pos2(kx, rect.center().y + 1.5), r + 1.0, with_alpha(Color32::BLACK, 50));
+    p.circle_filled(pos2(kx, rect.center().y), r, pal.accent);
+    p.circle_filled(pos2(kx, rect.center().y), r * 0.42, pal.on_accent);
+    if active {
+        p.circle_stroke(pos2(kx, rect.center().y), r + 4.0, Stroke::new(3.0, with_alpha(pal.accent, 50)));
+    }
+    let label = if step < 1.0 { format!("{:.1} {unit}", value) } else { format!("{:.0} {unit}", value) };
+    let lr = Rect::from_min_size(pos2(rect.min.x + w + 4.0, rect.center().y - 11.0), vec2(52.0, 22.0));
+    p.rect_filled(lr, 6.0, pal.base);
+    p.text(lr.center(), Align2::CENTER_CENTER, label, ui_font(12.0), pal.text);
+    resp
+}
