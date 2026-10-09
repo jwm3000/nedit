@@ -1429,8 +1429,9 @@ impl VimState {
             }
             'd' => {
                 let mut a = a;
-                // deleting the last line(s): also remove the preceding newline
-                if line && b == c.len() && a > 0 && (b == 0 || c[b - 1] != '\n') {
+                // deleting the last line(s) – including an empty last line after a
+                // trailing newline – removes the newline before them, like Vim
+                if line && b == c.len() && a > 0 && (b == a || c[b - 1] != '\n') {
                     a -= 1;
                 }
                 let s: String = c[a..b].iter().collect();
@@ -1857,6 +1858,29 @@ mod tests {
         assert_eq!(run("abc", 0, "rz").0, "zbc");
         assert_eq!(run("a", 0, ">>").0, "  a");
         assert_eq!(run("a", 0, "oneu<esc>").0, "a\nneu");
+    }
+
+    #[test]
+    fn delete_last_lines() {
+        // cursor on the empty last line after a trailing newline
+        let (t, p, _) = run("a\nb\n", 4, "dd");
+        assert_eq!(t, "a\nb");
+        assert_eq!(p, 2);
+        // last real line of a file with trailing newline
+        assert_eq!(run("a\nb\n", 2, "dd").0, "a\n");
+        assert_eq!(run("a\nb\n", 2, "dddd").0, "a");
+        // last line without trailing newline, cursor moves up
+        let (t, p, _) = run("a\nbc", 3, "dd");
+        assert_eq!((t.as_str(), p), ("a", 0));
+        // count larger than remaining lines deletes to the end
+        assert_eq!(run("a\nb\nc", 2, "5dd").0, "a");
+        // only line
+        assert_eq!(run("abc", 1, "dd").0, "");
+        assert_eq!(run("\n", 1, "dd").0, "");
+        // dj on the second-to-last line
+        assert_eq!(run("a\nb\nc", 2, "dj").0, "a");
+        // dd then p restores the line below
+        assert_eq!(run("a\nb", 2, "ddp").0, "a\nb");
     }
 
     #[test]
