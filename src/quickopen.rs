@@ -70,6 +70,7 @@ enum Cmd {
     Lang,
     Updates,
     About,
+    Help,
     Vim,
     Theme(Option<String>),
 }
@@ -292,6 +293,7 @@ impl App {
                 (ic::TERMINAL, if self.settings.input_vim { tr!("Vim-Modus ausschalten" | "Turn off vim mode") } else { tr!("Vim-Modus einschalten" | "Turn on vim mode") }.into(), Cmd::Vim),
                 (ic::REFRESH, tr!("Nach Updates suchen" | "Check for updates").into(), Cmd::Updates),
                 (ic::GRADUATION, tr!("Über nEdit" | "About nEdit").into(), Cmd::About),
+                (ic::BOOKMARK, tr!("Hilfe & Tastenkürzel" | "Help & shortcuts").into(), Cmd::Help),
                 (ic::MAGIC, tr!("Theme: Omarchy folgen" | "Theme: follow Omarchy").into(), Cmd::Theme(None)),
             ];
             if !q.is_empty() {
@@ -398,6 +400,7 @@ impl App {
                 }
                 Cmd::Updates => self.updater.check(true, ctx),
                 Cmd::About => self.about_open = true,
+                Cmd::Help => self.help_open = true,
                 Cmd::Theme(name) => self.set_theme(name, ctx),
             },
         }

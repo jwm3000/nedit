@@ -10,6 +10,7 @@ mod editor;
 mod filetree;
 mod fonts;
 mod git;
+mod help;
 mod icons;
 mod pdfview;
 mod platform;

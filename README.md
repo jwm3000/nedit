@@ -55,7 +55,7 @@ im visuellen Modus wären unsichtbare Befehlszeichen verwirrend). Unterstützt w
 Normal/Insert/Visual/Visual-Line, Zähler, Bewegungen (`hjkl w b e W B E 0 ^ $ gg G f t ; , % { }`,
 `Ctrl-d/u`), Operatoren `d c y > <` mit Textobjekten (`iw aw i{ a{ i( i[ i" i$ ip` – z. B.
 `ci{` oder `di$` für LaTeX), `x X s S D C p P r J ~ o O i a I A`, `u`/`Ctrl-r`, `.`-Wiederholung,
-`/suche` mit `n`/`N` sowie `:w` (speichern & kompilieren), `:q`, `:wq`, `:{zeile}`,
+`/suche` und `?suche` (rückwärts) mit `n`/`N` sowie `:w` (speichern & kompilieren), `:q`, `:wq`, `:{zeile}`,
 `:%s/alt/neu/g` und `:noh`. **Strg+V** startet die Block-Auswahl (`d y c r ~ > < I A $`) –
 z. B. `Strg+V jj I% Esc` kommentiert drei Zeilen aus. Der Modus steht als Badge in der Statusleiste.
 
@@ -231,6 +231,8 @@ Rust-Bibliotheken (werden von Cargo automatisch geladen): `eframe`/`egui` (Oberf
 | Strg+S | Speichern & kompilieren (PDF springt zur Cursorstelle) |
 | Strg+Enter | Kompilieren |
 | 2× Umschalt / Strg+P | Schnellsuche (Dateien, Kapitel, Literatur, Befehle) |
+| Strg+Tab / Strg+Umschalt+Tab | Nächste / vorherige Datei (Dokument-Modus: Kapitel) |
+| F1 | Hilfe mit allen Tastenkürzeln (Deutsch/Englisch) |
 | Strg+E | Code ↔ Visuell |
 | Strg+Umschalt+D | Dokument-Modus |
 | F11 / Esc | Vollbild (nur Text) |

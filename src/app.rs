@@ -228,6 +228,7 @@ pub struct App {
     pub close_requested: bool,
     pub vim: crate::vim::VimState,
     pub about_open: bool,
+    pub help_open: bool,
     pub quick: Option<crate::quickopen::QuickOpen>,
     pub shift_tap: crate::quickopen::ShiftTap,
     /// Most recently opened files (newest first).
@@ -303,6 +304,7 @@ impl App {
             close_requested: false,
             vim: Default::default(),
             about_open: false,
+            help_open: false,
             quick: None,
             shift_tap: Default::default(),
             recent: vec![],
@@ -374,6 +376,39 @@ impl App {
         self.doc_mode = on;
         if on {
             self.rebuild_indexes();
+        }
+    }
+
+    /// Move keyboard focus to the next/previous file: chapters in document mode,
+    /// open tabs otherwise. The cursor position of each file is kept.
+    pub fn cycle_file(&mut self, dir: i32) {
+        let t = self.tab;
+        let list: Vec<String> = if t == Tab::Thesis && self.doc_mode {
+            crate::workspace::doc_files(self).into_iter().filter(|f| !self.doc_collapsed.contains(f)).collect()
+        } else {
+            self.ws(t).tabs.clone()
+        };
+        if list.is_empty() {
+            return;
+        }
+        let n = list.len() as i32;
+        let next = match self.ws(t).active.as_ref().and_then(|a| list.iter().position(|f| f == a)) {
+            Some(cur) => list[((cur as i32 + dir).rem_euclid(n)) as usize].clone(),
+            // current file isn't part of the list (e.g. main.tex): start at the first/last chapter
+            None => if dir > 0 { list[0].clone() } else { list[list.len() - 1].clone() },
+        };
+        if t == Tab::Thesis && self.doc_mode {
+            if let Some(i) = self.buffer_idx(&next) {
+                let b = &mut self.buffers[i];
+                let (a, z) = (b.sel_end, b.cursor);
+                b.select(a, z); // focus + scroll to the remembered cursor
+            }
+            if !self.ws(t).tabs.contains(&next) {
+                self.ws_mut(t).tabs.push(next.clone());
+            }
+            self.ws_mut(t).active = Some(next);
+        } else {
+            self.open_file(&next, t);
         }
     }
 
@@ -888,6 +923,9 @@ impl App {
                 i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::D),
             )
         });
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
+            self.help_open = !self.help_open;
+        }
         if f11 && self.tab == Tab::Thesis {
             self.set_focus(!self.focus, ctx);
         }
@@ -900,6 +938,15 @@ impl App {
         }
         if esc && self.focus && ctx.memory(|m| m.focused().is_none()) && self.dialog.is_none() {
             self.set_focus(false, ctx);
+        }
+        // Ctrl+Tab / Ctrl+Shift+Tab: next / previous file (document mode: next chapter)
+        let (tab_prev, tab_next) = ctx.input_mut(|i| {
+            let prev = i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Tab);
+            let next = i.consume_key(Modifiers::COMMAND, Key::Tab);
+            (prev, next)
+        });
+        if (tab_next || tab_prev) && self.tab != Tab::Shelf && self.quick.is_none() {
+            self.cycle_file(if tab_next { 1 } else { -1 });
         }
         let doc = if self.tab == Tab::Shelf { self.last_doc_tab } else { self.tab };
         if save || compile {
@@ -1067,6 +1114,7 @@ impl eframe::App for App {
             crate::workspace::focus_ui(self, ui, now);
             self.dialogs(&ctx, &pal, now);
             self.about_window(&ctx, &pal);
+            self.help_window(&ctx, &pal);
             self.quick_ui(&ctx, now);
             self.draw_toasts(&ctx, &pal, now);
             return;
@@ -1086,6 +1134,7 @@ impl eframe::App for App {
         }
         self.dialogs(&ctx, &pal, now);
         self.about_window(&ctx, &pal);
+        self.help_window(&ctx, &pal);
         self.quick_ui(&ctx, now);
         self.draw_toasts(&ctx, &pal, now);
     }
@@ -1222,6 +1271,10 @@ impl App {
                                     changed |= ui.selectable_value(&mut self.project.config.slides_engine, e.to_string(), e).changed();
                                 }
                             });
+                            if ui.button(format!("{}  {}", ic::BOOKMARK, tr!("Hilfe & Tastenkürzel …   F1" | "Help & shortcuts …   F1"))).clicked() {
+                                self.help_open = true;
+                                ui.close();
+                            }
                             if ui.button(trf!("{}  Über nEdit …" | "{}  About nEdit …", ic::GRADUATION)).clicked() {
                                 self.about_open = true;
                                 ui.close();
@@ -1872,6 +1925,13 @@ impl App {
                 i.events.push(egui::Event::Paste(String::new()));
                 i.events.push(egui::Event::Text("jjjjlll".into()));
             });
+        }
+        if name.contains("ctrltab") && self.debug_typed != 3000 + self.shot_step {
+            self.debug_typed = 3000 + self.shot_step;
+            ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }));
+        }
+        if name.contains("help") {
+            self.help_open = true;
         }
         if name.contains("about") {
             self.about_open = true;

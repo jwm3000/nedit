@@ -1054,7 +1054,7 @@ pub fn present_ui(app: &mut App, ui: &mut Ui, now: f64) {
 
 // ───────────────────────────── document mode ─────────────────────────────
 
-fn doc_files(app: &mut App) -> Vec<String> {
+pub fn doc_files(app: &mut App) -> Vec<String> {
     let main = app.project.config.thesis_main.clone();
     let files = crate::project::document_files(&main, &|f| app.read_source(f));
     for f in &files {

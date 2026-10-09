@@ -67,6 +67,8 @@ pub struct VimState {
     pub message: String,
     last_find: Option<(char, char)>,
     last_search: String,
+    /// Direction of the last search: true = forward (`/`), false = backward (`?`).
+    search_back: bool,
     last_set: Option<(usize, usize)>,
     buf_id: Option<egui::Id>,
     last_change: Vec<VKey>,
@@ -717,8 +719,12 @@ impl VimState {
                 self.mode = Mode::Normal;
                 return Step::Done;
             }
-            VKey::Ch('/') | VKey::Ch('?') => {
+            VKey::Ch('/') => {
                 self.cmdline = Some("/".into());
+                return Step::Done;
+            }
+            VKey::Ch('?') => {
+                self.cmdline = Some("?".into());
                 return Step::Done;
             }
             VKey::Ch('u') if !visual => {
@@ -772,7 +778,8 @@ impl VimState {
                     self.message = trf!("Nicht gefunden: {}" | "Not found: {}", self.last_search);
                     return Step::Done;
                 }
-                let fwd = k == VKey::Ch('n');
+                // n repeats in the direction of the last search, N goes the other way
+                let fwd = (k == VKey::Ch('n')) != self.search_back;
                 for _ in 0..n {
                     self.pos = if fwd {
                         m.iter().find(|x| x.0 > self.pos).or(m.first()).unwrap().0
@@ -1482,12 +1489,15 @@ impl VimState {
     }
 
     fn ex(&mut self, text: &mut String, cmd: &str, out: &mut VimOut) {
-        if let Some(pat) = cmd.strip_prefix('/') {
+        let search = cmd.strip_prefix('/').map(|p| (p, false)).or_else(|| cmd.strip_prefix('?').map(|p| (p, true)));
+        if let Some((pat, back)) = search {
             if !pat.is_empty() {
                 self.last_search = pat.to_string();
             }
+            self.search_back = back;
             let m = crate::editor::find_matches(text, &self.last_search);
-            match m.iter().find(|x| x.0 > self.pos).or(m.first()) {
+            let hit = if back { m.iter().rev().find(|x| x.0 < self.pos).or(m.last()) } else { m.iter().find(|x| x.0 > self.pos).or(m.first()) };
+            match hit {
                 Some(x) => {
                     self.pos = x.0;
                     out.search = Some(self.last_search.clone());
@@ -1918,5 +1928,14 @@ mod tests {
         assert!(o.save && o.close);
         let (_, p, _) = run("one two one", 0, "/one<cr>");
         assert_eq!(p, 8);
+        // ? searches backwards, n keeps the direction, N reverses it
+        let (_, p, _) = run("ab ab ab", 7, "?ab<cr>");
+        assert_eq!(p, 6);
+        let (_, p, _) = run("ab ab ab", 7, "?ab<cr>n");
+        assert_eq!(p, 3);
+        let (_, p, _) = run("ab ab ab", 7, "?ab<cr>nN");
+        assert_eq!(p, 6);
+        let (_, p, _) = run("ab ab ab", 0, "?ab<cr>");
+        assert_eq!(p, 6, "wraps around to the last match");
     }
 }
