@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=nEdit
+GenericName=LaTeX Studio
+Comment=LaTeX-Editor mit PDF-Vorschau, Literatur-Bibliothek und Präsentationsmodus
+Exec=nedit
+Icon=nedit
+Terminal=false
+Categories=Office;Education;TextEditor;
+Keywords=LaTeX;TeX;Thesis;Masterarbeit;BibTeX;Beamer;
+StartupWMClass=nedit

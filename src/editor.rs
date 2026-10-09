@@ -1,0 +1,1208 @@
+//! Code editor: file buffers, LaTeX syntax highlighting, gutter, completion.
+
+use crate::compile::Level;
+use crate::theme::{mix, with_alpha, Palette};
+use egui::text::{CCursor, CCursorRange, LayoutJob, LayoutSection, TextFormat};
+use egui::{pos2, vec2, Color32, FontFamily, FontId, Key, Modifiers, Rect, Shape, Stroke};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+
+pub struct Buffer {
+    pub rel: String,
+    pub abs: PathBuf,
+    pub text: String,
+    saved_hash: u64,
+    pub disk_stamp: u64,
+    pub id: egui::Id,
+    pending_select: Option<(usize, usize)>,
+    init_cursor: bool,
+    pub cursor: usize,
+    pub sel_end: usize,
+    pub line: usize,
+    pub col: usize,
+    hl_cache: Option<(u64, LayoutJob)>,
+    vis_cache: Option<(u64, Vec<crate::visual::Span>, Vec<crate::visual::Decor>)>,
+    pub doc_height: f32,
+    pub last_edit: f64,
+    pub completion: Option<Completion>,
+    pub request_focus: bool,
+    pub cursor_moved: bool,
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+pub fn char_to_byte(s: &str, ci: usize) -> usize {
+    s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
+}
+
+pub fn byte_to_char(s: &str, bi: usize) -> usize {
+    s[..bi.min(s.len())].chars().count()
+}
+
+impl Buffer {
+    pub fn open(root: &std::path::Path, rel: &str) -> std::io::Result<Self> {
+        let abs = root.join(rel);
+        let text = std::fs::read_to_string(&abs)?.replace("\r\n", "\n");
+        Ok(Buffer {
+            rel: rel.to_string(),
+            saved_hash: hash_str(&text),
+            disk_stamp: crate::pdfview::file_stamp(&abs),
+            abs,
+            text,
+            id: egui::Id::new(("buffer", rel.to_string())),
+            pending_select: None,
+            init_cursor: true,
+            cursor: 0,
+            sel_end: 0,
+            line: 1,
+            col: 1,
+            hl_cache: None,
+            vis_cache: None,
+            doc_height: 0.0,
+            last_edit: 0.0,
+            completion: None,
+            request_focus: false,
+            cursor_moved: false,
+        })
+    }
+
+    pub fn has_pending_select(&self) -> bool {
+        self.pending_select.is_some()
+    }
+
+    pub fn dirty(&self) -> bool {
+        hash_str(&self.text) != self.saved_hash
+    }
+
+    pub fn save(&mut self) -> std::io::Result<()> {
+        if let Some(p) = self.abs.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        std::fs::write(&self.abs, &self.text)?;
+        self.saved_hash = hash_str(&self.text);
+        self.disk_stamp = crate::pdfview::file_stamp(&self.abs);
+        Ok(())
+    }
+
+    /// Pick up external changes if the buffer has no unsaved edits.
+    pub fn reload_if_changed(&mut self) -> bool {
+        let st = crate::pdfview::file_stamp(&self.abs);
+        if st != self.disk_stamp && st != 0 {
+            self.disk_stamp = st;
+            if !self.dirty() {
+                if let Ok(t) = std::fs::read_to_string(&self.abs) {
+                    self.text = t.replace("\r\n", "\n");
+                    self.saved_hash = hash_str(&self.text);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn set_text_external(&mut self, t: String) {
+        self.text = t;
+        self.saved_hash = hash_str(&self.text);
+        self.disk_stamp = crate::pdfview::file_stamp(&self.abs);
+    }
+
+    /// Select a char range and scroll it into view on the next frame.
+    pub fn select(&mut self, a: usize, b: usize) {
+        self.pending_select = Some((a, b));
+        self.request_focus = true;
+    }
+
+    pub fn goto_line(&mut self, line: usize) {
+        let mut ci = 0;
+        let mut l = 1;
+        for c in self.text.chars() {
+            if l >= line {
+                break;
+            }
+            if c == '\n' {
+                l += 1;
+            }
+            ci += 1;
+        }
+        self.select(ci, ci);
+    }
+
+    fn replace_chars(&mut self, a: usize, b: usize, with: &str) {
+        let ba = char_to_byte(&self.text, a);
+        let bb = char_to_byte(&self.text, b);
+        self.text.replace_range(ba..bb, with);
+    }
+
+    /// Insert at cursor (replacing selection). `$0` marks the final cursor position.
+    pub fn insert_snippet(&mut self, snippet: &str) {
+        let (a, b) = (self.cursor.min(self.sel_end), self.cursor.max(self.sel_end));
+        let selected: String = self.text.chars().skip(a).take(b - a).collect();
+        let s = snippet.replace("$SEL", &selected);
+        let (clean, caret) = match s.find("$0") {
+            Some(p) => (s.replacen("$0", "", 1), byte_to_char(&s, p)),
+            None => (s.clone(), s.chars().count()),
+        };
+        self.replace_chars(a, b, &clean);
+        self.select(a + caret, a + caret);
+    }
+}
+
+// ───────────────────────────── highlighting ─────────────────────────────
+
+#[derive(Clone)]
+pub struct Syntax {
+    pub text: Color32,
+    pub command: Color32,
+    pub keyword: Color32,
+    pub env: Color32,
+    pub math: Color32,
+    pub math_cmd: Color32,
+    pub comment: Color32,
+    pub brace: Color32,
+    pub special: Color32,
+    pub cite: Color32,
+    pub refc: Color32,
+    pub heading: Color32,
+}
+
+impl Syntax {
+    pub fn from_palette(p: &Palette) -> Self {
+        Syntax {
+            text: p.text,
+            command: p.blue,
+            keyword: p.magenta,
+            env: p.cyan,
+            math: p.green,
+            math_cmd: mix(p.green, p.cyan, 0.5),
+            comment: mix(p.dim, p.base, 0.1),
+            brace: mix(p.subtext, p.base, 0.25),
+            special: p.orange,
+            cite: p.yellow,
+            refc: p.cyan,
+            heading: p.bright,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tok {
+    Text,
+    Command,
+    Keyword,
+    Env,
+    Math,
+    MathCmd,
+    Comment,
+    Brace,
+    Special,
+    Cite,
+    Ref,
+    Heading,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Arg {
+    Heading,
+    Cite,
+    Ref,
+}
+
+const MATH_ENVS: &[&str] = &[
+    "equation", "equation*", "align", "align*", "gather", "gather*", "multline", "multline*", "flalign", "flalign*",
+    "displaymath", "math", "eqnarray", "eqnarray*", "alignat", "alignat*",
+];
+const HEADINGS: &[&str] = &[
+    "part", "chapter", "section", "subsection", "subsubsection", "paragraph", "title", "frametitle", "framesubtitle", "caption",
+    "subtitle",
+];
+
+pub fn is_cite_cmd(n: &str) -> bool {
+    n.contains("cite") || n == "nocite"
+}
+
+pub fn is_ref_cmd(n: &str) -> bool {
+    matches!(n, "ref" | "eqref" | "cref" | "Cref" | "autoref" | "pageref" | "label" | "vref" | "nameref" | "input" | "include" | "includegraphics" | "bibliography" | "usetheme")
+}
+
+fn tokenize(text: &str) -> Vec<(usize, usize, Tok)> {
+    let b = text.as_bytes();
+    let n = b.len();
+    let mut out: Vec<(usize, usize, Tok)> = Vec::with_capacity(n / 6);
+    let push = |s: usize, e: usize, t: Tok, out: &mut Vec<(usize, usize, Tok)>| {
+        if e <= s {
+            return;
+        }
+        if let Some(last) = out.last_mut() {
+            if last.2 == t && last.1 == s {
+                last.1 = e;
+                return;
+            }
+        }
+        out.push((s, e, t));
+    };
+    #[derive(PartialEq, Clone, Copy)]
+    enum M {
+        None,
+        Dollar,
+        DDollar,
+        Paren,
+        Bracket,
+        Env,
+    }
+    let mut math = M::None;
+    let mut pending: Option<Arg> = None;
+    let is_alpha = |c: u8| c.is_ascii_alphabetic() || c == b'@';
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        let in_math = math != M::None;
+        match c {
+            b'%' => {
+                let e = text[i..].find('\n').map(|p| i + p).unwrap_or(n);
+                push(i, e, Tok::Comment, &mut out);
+                i = e;
+            }
+            b'\\' => {
+                let mut j = i + 1;
+                if j < n && is_alpha(b[j]) {
+                    while j < n && is_alpha(b[j]) {
+                        j += 1;
+                    }
+                    let name = &text[i + 1..j];
+                    if j < n && b[j] == b'*' {
+                        j += 1;
+                    }
+                    if name == "begin" || name == "end" {
+                        push(i, j, Tok::Keyword, &mut out);
+                        if j < n && b[j] == b'{' {
+                            if let Some(close) = text[j..].find('}').map(|p| j + p) {
+                                let env = &text[j + 1..close];
+                                if !env.contains('\n') {
+                                    push(j, j + 1, Tok::Brace, &mut out);
+                                    push(j + 1, close, Tok::Env, &mut out);
+                                    push(close, close + 1, Tok::Brace, &mut out);
+                                    if MATH_ENVS.contains(&env) {
+                                        math = if name == "begin" { M::Env } else { M::None };
+                                    }
+                                    j = close + 1;
+                                }
+                            }
+                        }
+                        i = j;
+                        continue;
+                    }
+                    let t = if in_math { Tok::MathCmd } else { Tok::Command };
+                    push(i, j, t, &mut out);
+                    if !in_math {
+                        if HEADINGS.contains(&name) {
+                            pending = Some(Arg::Heading);
+                        } else if is_cite_cmd(name) {
+                            pending = Some(Arg::Cite);
+                        } else if is_ref_cmd(name) {
+                            pending = Some(Arg::Ref);
+                        }
+                    }
+                    i = j;
+                } else if j < n {
+                    let ch = b[j];
+                    let clen = text[j..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                    match ch {
+                        b'(' if math == M::None => {
+                            math = M::Paren;
+                            push(i, j + 1, Tok::MathCmd, &mut out);
+                        }
+                        b'[' if math == M::None => {
+                            math = M::Bracket;
+                            push(i, j + 1, Tok::MathCmd, &mut out);
+                        }
+                        b')' if math == M::Paren => {
+                            push(i, j + 1, Tok::MathCmd, &mut out);
+                            math = M::None;
+                        }
+                        b']' if math == M::Bracket => {
+                            push(i, j + 1, Tok::MathCmd, &mut out);
+                            math = M::None;
+                        }
+                        _ => push(i, j + clen, if in_math { Tok::MathCmd } else { Tok::Special }, &mut out),
+                    }
+                    i = j + clen;
+                } else {
+                    push(i, n, Tok::Special, &mut out);
+                    i = n;
+                }
+            }
+            b'$' => {
+                let dd = i + 1 < n && b[i + 1] == b'$';
+                let w = if dd { 2 } else { 1 };
+                push(i, i + w, Tok::MathCmd, &mut out);
+                math = match (math, dd) {
+                    (M::None, true) => M::DDollar,
+                    (M::None, false) => M::Dollar,
+                    (M::DDollar, true) | (M::Dollar, false) => M::None,
+                    (m, _) => m,
+                };
+                i += w;
+            }
+            b'{' if pending.is_some() && !in_math => {
+                // argument group with special styling
+                let mut depth = 0;
+                let mut j = i;
+                while j < n {
+                    match b[j] {
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        b'\n' if j + 1 < n && b[j + 1] == b'\n' => break,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                let t = match pending.take().unwrap() {
+                    Arg::Heading => Tok::Heading,
+                    Arg::Cite => Tok::Cite,
+                    Arg::Ref => Tok::Ref,
+                };
+                push(i, i + 1, Tok::Brace, &mut out);
+                if t == Tok::Heading {
+                    // allow nested commands inside headings to be colored as heading text
+                    push(i + 1, j.min(n), t, &mut out);
+                } else {
+                    push(i + 1, j.min(n), t, &mut out);
+                }
+                if j < n {
+                    push(j, j + 1, Tok::Brace, &mut out);
+                    i = j + 1;
+                } else {
+                    i = n;
+                }
+            }
+            b'[' if pending.is_some() => {
+                let e = text[i..].find(']').map(|p| i + p + 1).unwrap_or(n);
+                push(i, e, Tok::Brace, &mut out);
+                i = e;
+            }
+            b'{' | b'}' | b'[' | b']' => {
+                push(i, i + 1, if in_math { Tok::Math } else { Tok::Brace }, &mut out);
+                pending = None;
+                i += 1;
+            }
+            b'&' | b'~' => {
+                push(i, i + 1, Tok::Special, &mut out);
+                i += 1;
+            }
+            b'^' | b'_' if in_math => {
+                push(i, i + 1, Tok::MathCmd, &mut out);
+                i += 1;
+            }
+            _ => {
+                let mut j = i + 1;
+                while j < n && !matches!(b[j], b'%' | b'\\' | b'$' | b'{' | b'}' | b'[' | b']' | b'&' | b'~' | b'^' | b'_') {
+                    j += 1;
+                }
+                if pending.is_some() && !text[i..j].trim().is_empty() {
+                    pending = None;
+                }
+                push(i, j, if in_math { Tok::Math } else { Tok::Text }, &mut out);
+                i = j;
+            }
+        }
+    }
+    out
+}
+
+pub fn highlight(text: &str, syn: &Syntax, size: f32) -> LayoutJob {
+    let mono = FontId::new(size, FontFamily::Monospace);
+    let bold = FontId::new(size, FontFamily::Name("mono-bold".into()));
+    let mut job = LayoutJob { text: text.to_string(), ..Default::default() };
+    for (s, e, t) in tokenize(text) {
+        let (color, font, italics) = match t {
+            Tok::Text => (syn.text, &mono, false),
+            Tok::Command => (syn.command, &mono, false),
+            Tok::Keyword => (syn.keyword, &mono, false),
+            Tok::Env => (syn.env, &mono, false),
+            Tok::Math => (syn.math, &mono, false),
+            Tok::MathCmd => (syn.math_cmd, &mono, false),
+            Tok::Comment => (syn.comment, &mono, true),
+            Tok::Brace => (syn.brace, &mono, false),
+            Tok::Special => (syn.special, &mono, false),
+            Tok::Cite => (syn.cite, &mono, false),
+            Tok::Ref => (syn.refc, &mono, false),
+            Tok::Heading => (syn.heading, &bold, false),
+        };
+        job.sections.push(LayoutSection {
+            leading_space: 0.0,
+            byte_range: egui::text::ByteIndex(s)..egui::text::ByteIndex(e),
+            format: TextFormat { font_id: font.clone(), color, italics, ..Default::default() },
+        });
+    }
+    if job.sections.is_empty() {
+        job.sections.push(LayoutSection { leading_space: 0.0, byte_range: egui::text::ByteIndex(0)..egui::text::ByteIndex(0), format: TextFormat { font_id: mono, color: syn.text, ..Default::default() } });
+    }
+    job
+}
+
+// ───────────────────────────── completion ─────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CompKind {
+    Cite,
+    Ref,
+    Env,
+    Command,
+    File,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompItem {
+    pub label: String,
+    pub detail: String,
+    pub insert: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Completion {
+    pub kind: CompKind,
+    pub start: usize, // char index where the typed prefix starts
+    pub items: Vec<CompItem>,
+    pub selected: usize,
+}
+
+pub struct CompletionSources<'a> {
+    pub cites: &'a [CompItem],
+    pub labels: &'a [String],
+    pub files: &'a [String],
+}
+
+pub const ENVIRONMENTS: &[&str] = &[
+    "figure", "table", "itemize", "enumerate", "description", "equation", "equation*", "align", "align*", "frame", "columns",
+    "column", "block", "exampleblock", "alertblock", "tabular", "tabularx", "center", "minipage", "quote", "abstract",
+    "tikzpicture", "axis", "subfigure", "lstlisting", "verbatim", "gather", "cases", "pmatrix", "bmatrix", "theorem", "proof",
+];
+
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("section", "section{$0}"),
+    ("subsection", "subsection{$0}"),
+    ("subsubsection", "subsubsection{$0}"),
+    ("chapter", "chapter{$0}"),
+    ("paragraph", "paragraph{$0}"),
+    ("textbf", "textbf{$0}"),
+    ("textit", "textit{$0}"),
+    ("emph", "emph{$0}"),
+    ("texttt", "texttt{$0}"),
+    ("underline", "underline{$0}"),
+    ("enquote", "enquote{$0}"),
+    ("cite", "cite{$0}"),
+    ("citep", "citep{$0}"),
+    ("citet", "citet{$0}"),
+    ("ref", "ref{$0}"),
+    ("cref", "cref{$0}"),
+    ("Cref", "Cref{$0}"),
+    ("eqref", "eqref{$0}"),
+    ("label", "label{$0}"),
+    ("footnote", "footnote{$0}"),
+    ("includegraphics", "includegraphics[width=\\linewidth]{$0}"),
+    ("caption", "caption{$0}"),
+    ("centering", "centering"),
+    ("item", "item $0"),
+    ("frac", "frac{$0}{}"),
+    ("sqrt", "sqrt{$0}"),
+    ("sum", "sum_{$0}^{}"),
+    ("int", "int_{$0}^{}"),
+    ("mathbb", "mathbb{$0}"),
+    ("mathcal", "mathcal{$0}"),
+    ("mathrm", "mathrm{$0}"),
+    ("left", "left( $0 \\right)"),
+    ("input", "input{$0}"),
+    ("frametitle", "frametitle{$0}"),
+    ("pause", "pause"),
+    ("alert", "alert{$0}"),
+    ("url", "url{$0}"),
+    ("href", "href{$0}{}"),
+    ("num", "num{$0}"),
+    ("SI", "SI{$0}{}"),
+    ("toprule", "toprule"),
+    ("midrule", "midrule"),
+    ("bottomrule", "bottomrule"),
+    ("newpage", "newpage"),
+    ("clearpage", "clearpage"),
+    ("tableofcontents", "tableofcontents"),
+    ("vspace", "vspace{$0}"),
+    ("hspace", "hspace{$0}"),
+    ("textwidth", "textwidth"),
+    ("linewidth", "linewidth"),
+    ("dots", "dots"),
+    ("alpha", "alpha"),
+    ("beta", "beta"),
+    ("gamma", "gamma"),
+    ("delta", "delta"),
+    ("lambda", "lambda"),
+    ("theta", "theta"),
+    ("sigma", "sigma"),
+    ("mu", "mu"),
+];
+
+fn fuzzy_score(hay: &str, needle: &str) -> Option<i32> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let h = hay.to_lowercase();
+    let n = needle.to_lowercase();
+    if h.starts_with(&n) {
+        return Some(100 - h.len() as i32);
+    }
+    if let Some(p) = h.find(&n) {
+        return Some(50 - p as i32);
+    }
+    // subsequence
+    let mut it = h.chars();
+    for c in n.chars() {
+        it.by_ref().find(|&x| x == c)?;
+    }
+    Some(10)
+}
+
+fn compute_completion(text: &str, cursor: usize, src: &CompletionSources) -> Option<Completion> {
+    let bcur = char_to_byte(text, cursor);
+    let line_start = text[..bcur].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let before = &text[line_start..bcur];
+    // inside \cmd[..]{prefix
+    let re_arg = regex::Regex::new(r"\\([A-Za-z]+)\*?(?:\[[^\]]*\])*\{([^{}]*)$").unwrap();
+    if let Some(c) = re_arg.captures(before) {
+        let cmd = &c[1];
+        let arg = c.get(2).unwrap();
+        // for comma separated lists only the last part
+        let part_off = arg.as_str().rfind(',').map(|p| p + 1).unwrap_or(0);
+        let prefix = arg.as_str()[part_off..].trim_start();
+        let prefix_start_b = line_start + arg.start() + part_off + (arg.as_str()[part_off..].len() - prefix.len());
+        let start = byte_to_char(text, prefix_start_b);
+        let (kind, mut items): (CompKind, Vec<(i32, CompItem)>) = if is_cite_cmd(cmd) {
+            (
+                CompKind::Cite,
+                src.cites
+                    .iter()
+                    .filter_map(|it| fuzzy_score(&format!("{} {}", it.label, it.detail), prefix).map(|s| (s, it.clone())))
+                    .collect(),
+            )
+        } else if matches!(cmd, "ref" | "eqref" | "cref" | "Cref" | "autoref" | "pageref" | "vref" | "nameref") {
+            (
+                CompKind::Ref,
+                src.labels
+                    .iter()
+                    .filter_map(|l| fuzzy_score(l, prefix).map(|s| (s, CompItem { label: l.clone(), detail: String::new(), insert: l.clone() })))
+                    .collect(),
+            )
+        } else if cmd == "begin" || cmd == "end" {
+            (
+                CompKind::Env,
+                ENVIRONMENTS
+                    .iter()
+                    .filter_map(|e| {
+                        fuzzy_score(e, prefix).map(|s| {
+                            let insert = if cmd == "begin" { format!("{e}}}\n  $0\n\\end{{{e}}}") } else { format!("{e}}}") };
+                            (s, CompItem { label: e.to_string(), detail: "Umgebung".into(), insert })
+                        })
+                    })
+                    .collect(),
+            )
+        } else if matches!(cmd, "input" | "include" | "includegraphics") {
+            (
+                CompKind::File,
+                src.files
+                    .iter()
+                    .filter(|f| if cmd == "includegraphics" { !f.ends_with(".tex") } else { f.ends_with(".tex") })
+                    .filter_map(|f| {
+                        let ins = if cmd == "includegraphics" { f.clone() } else { f.trim_end_matches(".tex").to_string() };
+                        fuzzy_score(f, prefix).map(|s| (s, CompItem { label: f.clone(), detail: String::new(), insert: ins }))
+                    })
+                    .collect(),
+            )
+        } else {
+            return None;
+        };
+        if items.is_empty() {
+            return None;
+        }
+        items.sort_by(|a, b| b.0.cmp(&a.0));
+        return Some(Completion { kind, start, items: items.into_iter().take(40).map(|x| x.1).collect(), selected: 0 });
+    }
+    // \comm  (command name)
+    let re_cmd = regex::Regex::new(r"\\([A-Za-z]{2,})$").unwrap();
+    if let Some(c) = re_cmd.captures(before) {
+        let m = c.get(1).unwrap();
+        let prefix = m.as_str();
+        let start = byte_to_char(text, line_start + m.start());
+        let mut items: Vec<(i32, CompItem)> = COMMANDS
+            .iter()
+            .filter(|(n, _)| n.starts_with(prefix) && *n != prefix)
+            .map(|(n, ins)| (100 - n.len() as i32, CompItem { label: format!("\\{n}"), detail: String::new(), insert: ins.to_string() }))
+            .collect();
+        if prefix == "beg" || prefix == "begi" || prefix == "begin" {
+            items.insert(0, (200, CompItem { label: "\\begin{…}".into(), detail: "Umgebung".into(), insert: "begin{$0".into() }));
+        }
+        if items.is_empty() {
+            return None;
+        }
+        items.sort_by(|a, b| b.0.cmp(&a.0));
+        return Some(Completion { kind: CompKind::Command, start, items: items.into_iter().take(12).map(|x| x.1).collect(), selected: 0 });
+    }
+    None
+}
+
+// ───────────────────────────── editor widget ─────────────────────────────
+
+pub struct EditorStyle<'a> {
+    pub pal: &'a Palette,
+    pub syntax: &'a Syntax,
+    pub font_size: f32,
+    pub style_rev: u64,
+    pub issues: &'a HashMap<usize, (Level, String)>,
+    pub visual: bool,
+    pub embedded: bool,
+    pub git_marks: &'a [crate::git::LineMark],
+}
+
+pub struct EditorOutput {
+    pub changed: bool,
+    pub ctrl_click_line: Option<usize>,
+}
+
+fn toggle_comment(buf: &mut Buffer) {
+    let (a, b) = (buf.cursor.min(buf.sel_end), buf.cursor.max(buf.sel_end));
+    let ba = char_to_byte(&buf.text, a);
+    let bb = char_to_byte(&buf.text, b);
+    let ls = buf.text[..ba].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let le = buf.text[bb..].find('\n').map(|p| bb + p).unwrap_or(buf.text.len());
+    let block = &buf.text[ls..le];
+    let all_commented = block.lines().filter(|l| !l.trim().is_empty()).all(|l| l.trim_start().starts_with('%'));
+    let new: Vec<String> = block
+        .split('\n')
+        .map(|l| {
+            if all_commented {
+                if let Some(p) = l.find('%') {
+                    let mut s = l.to_string();
+                    let rm = if l[p + 1..].starts_with(' ') { 2 } else { 1 };
+                    s.replace_range(p..p + rm, "");
+                    s
+                } else {
+                    l.to_string()
+                }
+            } else if l.trim().is_empty() {
+                l.to_string()
+            } else {
+                let ind = l.len() - l.trim_start().len();
+                format!("{}% {}", &l[..ind], &l[ind..])
+            }
+        })
+        .collect();
+    let new = new.join("\n");
+    let sc = byte_to_char(&buf.text, ls);
+    let len = new.chars().count();
+    buf.text.replace_range(ls..le, &new);
+    buf.select(sc, sc + len);
+}
+
+pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &CompletionSources) -> EditorOutput {
+    let ctx = ui.ctx().clone();
+    let mut out = EditorOutput { changed: false, ctrl_click_line: None };
+    let has_focus = ctx.memory(|m| m.has_focus(buf.id));
+
+    // keep cursor fresh from last frame state
+    if let Some(state) = egui::TextEdit::load_state(&ctx, buf.id) {
+        if let Some(r) = state.cursor.char_range() {
+            buf.cursor = r.primary.index.0;
+            buf.sel_end = r.secondary.index.0;
+        }
+    }
+
+    // ── key handling before the TextEdit sees the events ──
+    let mut accept: Option<CompItem> = None;
+    if has_focus {
+        if let Some(comp) = &mut buf.completion {
+            let n = comp.items.len();
+            ctx.input_mut(|i| {
+                if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                    comp.selected = (comp.selected + 1) % n;
+                }
+                if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                    comp.selected = (comp.selected + n - 1) % n;
+                }
+                if i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Tab) {
+                    accept = comp.items.get(comp.selected).cloned();
+                }
+            });
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                buf.completion = None;
+            }
+        } else {
+            let (tab, bold, ital, comment, shift_tab) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(Modifiers::NONE, Key::Tab),
+                    i.consume_key(Modifiers::COMMAND, Key::B),
+                    i.consume_key(Modifiers::COMMAND, Key::I),
+                    i.consume_key(Modifiers::COMMAND, Key::Slash) || i.consume_key(Modifiers::COMMAND, Key::Num7),
+                    i.consume_key(Modifiers::SHIFT, Key::Tab),
+                )
+            });
+            if tab {
+                buf.insert_snippet("  $0");
+                out.changed = true;
+            }
+            if shift_tab {
+                // outdent current line
+                let bl = char_to_byte(&buf.text, buf.cursor);
+                let ls = buf.text[..bl].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let rm = buf.text[ls..].chars().take(2).take_while(|c| *c == ' ').count();
+                if rm > 0 {
+                    buf.text.replace_range(ls..ls + rm, "");
+                    let c = buf.cursor.saturating_sub(rm);
+                    buf.select(c, c);
+                    out.changed = true;
+                }
+            }
+            if bold {
+                buf.insert_snippet("\\textbf{$SEL$0}");
+                out.changed = true;
+            }
+            if ital {
+                buf.insert_snippet("\\textit{$SEL$0}");
+                out.changed = true;
+            }
+            if comment {
+                toggle_comment(buf);
+                out.changed = true;
+            }
+        }
+    }
+    if let Some(item) = accept {
+        let comp = buf.completion.take().unwrap();
+        apply_completion(buf, &comp, &item);
+        out.changed = true;
+    }
+
+    // place the cursor at the start of a freshly opened file (no scrolling, no focus)
+    if buf.init_cursor {
+        buf.init_cursor = false;
+        if egui::TextEdit::load_state(&ctx, buf.id).is_none() {
+            let mut state = egui::text_edit::TextEditState::default();
+            state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(0))));
+            state.store(&ctx, buf.id);
+            buf.cursor = 0;
+            buf.sel_end = 0;
+        }
+    }
+    // apply pending selection
+    let mut scroll_to_cursor = false;
+    if let Some((a, b)) = buf.pending_select.take() {
+        let mut state = egui::TextEdit::load_state(&ctx, buf.id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(a), CCursor::new(b))));
+        state.store(&ctx, buf.id);
+        buf.cursor = b;
+        buf.sel_end = a;
+        scroll_to_cursor = true;
+    }
+    if buf.request_focus {
+        ctx.memory_mut(|m| m.request_focus(buf.id));
+        buf.request_focus = false;
+    }
+
+    let pal = st.pal;
+    let prev_cursor = buf.cursor;
+    let (output, galley, gpos) = if st.embedded {
+        editor_core(ui, buf, st, has_focus, scroll_to_cursor, &mut out, 0.0)
+    } else {
+        let avail_h = ui.available_height();
+        egui::ScrollArea::vertical()
+            .id_salt(("editor-scroll", buf.id, st.visual))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if st.visual {
+                    let avail_w = ui.available_width();
+                    let col = (avail_w - 64.0).clamp(240.0, 780.0);
+                    let pad = ((avail_w - col) / 2.0).max(0.0);
+                    let clip = ui.clip_rect();
+                    // paper
+                    let paper = egui::Rect::from_min_max(pos2(ui.min_rect().min.x + pad - 44.0, clip.min.y - 1.0), pos2(ui.min_rect().min.x + pad + col + 44.0, clip.max.y + 1.0));
+                    ui.painter().rect_filled(paper, 0.0, pal.base);
+                    ui.painter().line_segment([paper.left_top(), paper.left_bottom()], Stroke::new(1.0, with_alpha(pal.border, 90)));
+                    ui.painter().line_segment([paper.right_top(), paper.right_bottom()], Stroke::new(1.0, with_alpha(pal.border, 90)));
+                    ui.horizontal_top(|ui| {
+                        ui.add_space(pad);
+                        ui.vertical(|ui| {
+                            ui.set_width(col);
+                            editor_core(ui, buf, st, has_focus, scroll_to_cursor, &mut out, avail_h)
+                        })
+                        .inner
+                    })
+                    .inner
+                } else {
+                    editor_core(ui, buf, st, has_focus, scroll_to_cursor, &mut out, avail_h)
+                }
+            })
+            .inner
+    };
+
+    if output.response.changed() {
+        out.changed = true;
+    }
+    if let Some(r) = output.cursor_range {
+        buf.cursor = r.primary.index.0;
+        buf.sel_end = r.secondary.index.0;
+    }
+    buf.cursor_moved = buf.cursor != prev_cursor;
+    let before = &buf.text[..char_to_byte(&buf.text, buf.cursor)];
+    buf.line = before.matches('\n').count() + 1;
+    buf.col = before.rsplit('\n').next().map(|s| s.chars().count()).unwrap_or(0) + 1;
+
+    // update completion
+    if out.changed && ctx.memory(|m| m.has_focus(buf.id)) {
+        buf.last_edit = ctx.input(|i| i.time);
+        buf.completion = compute_completion(&buf.text, buf.cursor, src).map(|mut c| {
+            if let Some(old) = &buf.completion {
+                if old.kind == c.kind && old.start == c.start {
+                    c.selected = old.selected.min(c.items.len().saturating_sub(1));
+                }
+            }
+            c
+        });
+    } else if let Some(c) = &buf.completion {
+        if buf.cursor < c.start || !ctx.memory(|m| m.has_focus(buf.id)) && !ctx.is_pointer_over_egui() {
+            buf.completion = None;
+        }
+    }
+
+    // completion popup
+    if let Some(comp) = &mut buf.completion {
+        let crect = galley.pos_from_cursor(CCursor::new(buf.cursor)).translate(gpos.to_vec2());
+        let pos = pos2(crect.min.x - 8.0, crect.max.y + 4.0);
+        let mut clicked: Option<usize> = None;
+        egui::Area::new(buf.id.with("completion"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(&ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(pal.surface)
+                    .stroke(Stroke::new(1.0, pal.border))
+                    .inner_margin(egui::Margin::same(4))
+                    .corner_radius(8)
+                    .show(ui, |ui| {
+                        ui.set_min_width(300.0);
+                        ui.set_max_width(520.0);
+                        let (icon, tint) = match comp.kind {
+                            CompKind::Cite => (crate::icons::BOOK, pal.yellow),
+                            CompKind::Ref => (crate::icons::LINK, pal.cyan),
+                            CompKind::Env => (crate::icons::CUBE, pal.magenta),
+                            CompKind::Command => (crate::icons::CODE, pal.blue),
+                            CompKind::File => (crate::icons::FILE, pal.subtext),
+                        };
+                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            for (i, it) in comp.items.iter().enumerate() {
+                                let sel = i == comp.selected;
+                                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), if it.detail.is_empty() { 26.0 } else { 40.0 }), egui::Sense::click());
+                                if sel {
+                                    ui.painter().rect_filled(rect, 6.0, with_alpha(pal.accent, 38));
+                                    if comp_needs_scroll(ui, rect) {
+                                        ui.scroll_to_rect(rect, None);
+                                    }
+                                } else if resp.hovered() {
+                                    ui.painter().rect_filled(rect, 6.0, pal.overlay);
+                                }
+                                let p = ui.painter();
+                                p.text(pos2(rect.min.x + 14.0, rect.min.y + 13.0), egui::Align2::CENTER_CENTER, icon, FontId::proportional(12.0), tint);
+                                p.text(pos2(rect.min.x + 28.0, rect.min.y + 13.0), egui::Align2::LEFT_CENTER, &it.label, FontId::new(13.0, FontFamily::Monospace), if sel { pal.bright } else { pal.text });
+                                if !it.detail.is_empty() {
+                                    let d: String = it.detail.chars().take(70).collect();
+                                    p.text(pos2(rect.min.x + 28.0, rect.min.y + 29.0), egui::Align2::LEFT_CENTER, d, FontId::proportional(11.5), pal.dim);
+                                }
+                                if resp.clicked() {
+                                    clicked = Some(i);
+                                }
+                            }
+                        });
+                    });
+            });
+        if let Some(i) = clicked {
+            let comp = buf.completion.take().unwrap();
+            let item = comp.items[i].clone();
+            apply_completion(buf, &comp, &item);
+            out.changed = true;
+        }
+    }
+    out
+}
+
+
+fn line_range_bytes(text: &str, ci: usize) -> (usize, usize) {
+    let b = char_to_byte(text, ci);
+    let ls = text[..b].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let le = text[b..].find('\n').map(|p| b + p).unwrap_or(text.len());
+    (ls, le)
+}
+
+/// The TextEdit itself plus gutter / decorations. Returns output, galley and galley position.
+fn editor_core(
+    ui: &mut egui::Ui,
+    buf: &mut Buffer,
+    st: &EditorStyle,
+    has_focus: bool,
+    scroll_to_cursor: bool,
+    out: &mut EditorOutput,
+    min_h: f32,
+) -> (egui::text_edit::TextEditOutput, std::sync::Arc<egui::Galley>, egui::Pos2) {
+    let pal = st.pal;
+    let visual = st.visual;
+    let line_count = buf.text.matches('\n').count() + 1;
+    let digits = line_count.to_string().len().max(3) as f32;
+    let gutter = if visual { 0.0 } else { (digits * st.font_size * 0.6 + 30.0).min(120.0) };
+    let row_h = st.font_size;
+    let vsize = st.font_size + 3.0;
+    let raw = if visual && (has_focus || buf.completion.is_some()) { Some(line_range_bytes(&buf.text, buf.cursor)) } else { None };
+
+    let bg_idx = ui.painter().add(Shape::Noop);
+    let chip_idx = ui.painter().add(Shape::Noop);
+    let syn = st.syntax;
+    let size = st.font_size;
+    let rev = st.style_rev;
+    let vtheme = crate::visual::VisualTheme::new(pal, vsize);
+    let id = buf.id;
+    let Buffer { text, hl_cache, vis_cache, .. } = buf;
+    let mut layouter = |ui: &egui::Ui, tb: &dyn egui::TextBuffer, wrap: f32| {
+        let s = tb.as_str();
+        let th = hash_str(s);
+        let job = if visual {
+            if vis_cache.as_ref().is_none_or(|(h, _, _)| *h != th) {
+                let (sp, de) = crate::visual::spans(s);
+                *vis_cache = Some((th, sp, de));
+            }
+            let key = th ^ rev.rotate_left(7) ^ (vsize.to_bits() as u64).rotate_left(3) ^ raw.map_or(1, |(a, b)| (a as u64) << 20 ^ b as u64) ^ 0x5151;
+            match hl_cache {
+                Some((k, j)) if *k == key => j.clone(),
+                _ => {
+                    let j = crate::visual::layout_job(s, &vis_cache.as_ref().unwrap().1, &vtheme, raw);
+                    *hl_cache = Some((key, j.clone()));
+                    j
+                }
+            }
+        } else {
+            let key = th ^ rev.rotate_left(7) ^ (size.to_bits() as u64);
+            match hl_cache {
+                Some((k, j)) if *k == key => j.clone(),
+                _ => {
+                    let j = highlight(s, syn, size);
+                    *hl_cache = Some((key, j.clone()));
+                    j
+                }
+            }
+        };
+        let mut job = job;
+        job.wrap.max_width = wrap;
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    let margin = if visual {
+        egui::Margin { left: 0, right: 0, top: if st.embedded { 6 } else { 36 }, bottom: if st.embedded { 6 } else { 80 } }
+    } else {
+        egui::Margin { left: gutter as i8, right: 16, top: 12, bottom: 40 }
+    };
+    let font = if visual { FontId::new(vsize, FontFamily::Name("serif".into())) } else { FontId::new(st.font_size, FontFamily::Monospace) };
+    let output = egui::TextEdit::multiline(text)
+        .id(id)
+        .font(font)
+        .frame(egui::Frame::NONE.inner_margin(margin))
+        .desired_width(f32::INFINITY)
+        .min_size(vec2(0.0, (min_h - 4.0).max(0.0)))
+        .lock_focus(true)
+        .layouter(&mut layouter)
+        .show(ui);
+    let galley = output.galley.clone();
+    let gpos = output.galley_pos;
+    let clip = ui.clip_rect();
+    let resp_rect = output.response.rect;
+    let painter = ui.painter();
+
+    if !visual {
+        let gutter_rect = Rect::from_min_max(pos2(resp_rect.min.x, clip.min.y.max(resp_rect.min.y)), pos2(resp_rect.min.x + gutter - 12.0, clip.max.y.min(resp_rect.max.y)));
+        painter.rect_filled(gutter_rect, 0.0, mix(pal.base, pal.mantle, 0.5));
+    }
+
+    // line bookkeeping: numbers, issue markers, cursor line
+    let cur_line = buf.text[..char_to_byte(&buf.text, buf.cursor)].matches('\n').count() + 1;
+    let mut line = 1usize;
+    let mut new_par = true;
+    let num_font = FontId::new(st.font_size * 0.86, FontFamily::Monospace);
+    let mut cursor_rows: Option<(f32, f32)> = None;
+    let left = if visual { resp_rect.min.x - 26.0 } else { resp_rect.min.x + gutter - 12.0 };
+    // git change bars: line -> kind
+    let mut gm: HashMap<usize, crate::git::MarkKind> = HashMap::new();
+    for m in st.git_marks {
+        if m.kind == crate::git::MarkKind::Deleted {
+            gm.entry(m.start).or_insert(m.kind);
+        } else {
+            for l in m.start..m.start + m.count {
+                gm.insert(l, m.kind);
+            }
+        }
+    }
+    let bar_x = if visual { resp_rect.min.x - 10.0 } else { resp_rect.min.x + gutter - 15.0 };
+    for row in &galley.rows {
+        let y0 = gpos.y + row.pos.y;
+        let y1 = y0 + row.size.y.max(if visual { 1.0 } else { row_h });
+        if line == cur_line {
+            cursor_rows = Some(match cursor_rows {
+                Some((a, _)) => (a, y1),
+                None => (y0, y1),
+            });
+        }
+        if y1 >= clip.min.y && y0 <= clip.max.y {
+            if let Some(k) = gm.get(&line) {
+                match k {
+                    crate::git::MarkKind::Added => {
+                        painter.rect_filled(Rect::from_min_max(pos2(bar_x - 1.5, y0), pos2(bar_x + 1.5, y1)), 1.0, with_alpha(pal.green, 200));
+                    }
+                    crate::git::MarkKind::Modified => {
+                        painter.rect_filled(Rect::from_min_max(pos2(bar_x - 1.5, y0), pos2(bar_x + 1.5, y1)), 1.0, with_alpha(mix(pal.yellow, pal.orange, 0.35), 220));
+                    }
+                    crate::git::MarkKind::Deleted if new_par => {
+                        let pts = vec![pos2(bar_x - 3.0, y0 - 4.0), pos2(bar_x + 3.0, y0), pos2(bar_x - 3.0, y0 + 4.0)];
+                        painter.add(Shape::convex_polygon(pts, with_alpha(pal.red, 220), Stroke::NONE));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if new_par && y1 >= clip.min.y && y0 <= clip.max.y {
+            if !visual {
+                let color = if line == cur_line { pal.text } else { mix(pal.dim, pal.base, 0.2) };
+                painter.text(pos2(resp_rect.min.x + gutter - 20.0, y0 + row.size.y * 0.5), egui::Align2::RIGHT_CENTER, line.to_string(), num_font.clone(), color);
+            }
+            if let Some((lvl, _msg)) = st.issues.get(&line) {
+                let c = match lvl {
+                    Level::Error => pal.red,
+                    Level::Warning => pal.yellow,
+                    Level::BadBox => pal.dim,
+                };
+                let dot_x = if visual { resp_rect.min.x - 18.0 } else { resp_rect.min.x + 8.0 };
+                painter.circle_filled(pos2(dot_x, y0 + row.size.y * 0.5), 3.5, c);
+                if row.size.y > 2.0 {
+                    painter.rect_filled(Rect::from_min_max(pos2(left, y0), pos2(resp_rect.max.x, y0 + row.size.y)), 0.0, with_alpha(c, 18));
+                }
+            }
+        }
+        new_par = row.ends_with_newline;
+        if row.ends_with_newline {
+            line += 1;
+        }
+    }
+    if let Some((a, b)) = cursor_rows {
+        if has_focus || buf.completion.is_some() {
+            let r = Rect::from_min_max(pos2(left, a), pos2(resp_rect.max.x + if visual { 26.0 } else { 0.0 }, b));
+            if visual {
+                painter.set(bg_idx, Shape::rect_filled(r.expand2(vec2(0.0, 2.0)), 6.0, with_alpha(pal.text, 7)));
+            } else {
+                painter.set(bg_idx, Shape::rect_filled(r, 0.0, with_alpha(pal.text, 9)));
+            }
+        }
+    }
+    if !visual {
+        painter.line_segment(
+            [pos2(resp_rect.min.x + gutter - 12.0, clip.min.y.max(resp_rect.min.y)), pos2(resp_rect.min.x + gutter - 12.0, clip.max.y.min(resp_rect.max.y))],
+            Stroke::new(1.0, with_alpha(pal.border, 120)),
+        );
+    } else if let Some((_, spans, decor)) = &buf.vis_cache {
+        // rounded chips behind \cite / \ref keys
+        let mut chips = vec![];
+        let (mut lb, mut lc) = (0usize, 0usize);
+        for sp in spans.iter().filter(|s| matches!(s.st, crate::visual::Vs::Cite | crate::visual::Vs::Ref)) {
+            if sp.e > buf.text.len() || raw.is_some_and(|(a, b)| sp.s < b && sp.e > a) {
+                continue;
+            }
+            lc += buf.text[lb..sp.s].chars().count();
+            lb = sp.s;
+            let c0 = lc;
+            let c1 = c0 + buf.text[sp.s..sp.e].chars().count();
+            let r0 = galley.pos_from_cursor(CCursor::new(c0)).translate(gpos.to_vec2());
+            let r1 = galley.pos_from_cursor(CCursor { index: c1.into(), prefer_next_row: false }).translate(gpos.to_vec2());
+            if r0.max.y < clip.min.y || r0.min.y > clip.max.y || (r0.center().y - r1.center().y).abs() > 2.0 {
+                continue;
+            }
+            let h = vsize * 1.05;
+            let cy = r0.center().y - vsize * 0.02;
+            let col = if sp.st == crate::visual::Vs::Cite { pal.accent } else { pal.cyan };
+            let rect = Rect::from_min_max(pos2(r0.min.x - 4.0, cy - h / 2.0), pos2(r1.min.x + 4.0, cy + h / 2.0));
+            chips.push(Shape::rect_filled(rect, 5.0, with_alpha(col, 30)));
+        }
+        painter.set(chip_idx, Shape::Vec(chips));
+        let _ = &spans;
+        // bullets / numbers for hidden \item
+        let (mut lb, mut lc) = (0usize, 0usize);
+        for d in decor {
+            if raw.is_some_and(|(a, _)| a == d.line_start) || d.byte > buf.text.len() {
+                continue;
+            }
+            lc += buf.text[lb..d.byte].chars().count();
+            lb = d.byte;
+            let r = galley.pos_from_cursor(CCursor::new(lc)).translate(gpos.to_vec2());
+            if r.max.y < clip.min.y || r.min.y > clip.max.y {
+                continue;
+            }
+            let x = r.min.x + 6.0 + 22.0 * d.depth.saturating_sub(1) as f32;
+            let y = r.center().y + 1.0;
+            match d.kind {
+                crate::visual::DecorKind::Bullet => {
+                    if d.depth % 2 == 1 {
+                        painter.circle_filled(pos2(x, y), 2.8, mix(pal.accent, pal.text, 0.3));
+                    } else {
+                        painter.circle_stroke(pos2(x, y), 2.6, Stroke::new(1.2, mix(pal.accent, pal.text, 0.3)));
+                    }
+                }
+                crate::visual::DecorKind::Number(n) => {
+                    painter.text(pos2(x + 8.0, y), egui::Align2::RIGHT_CENTER, format!("{n}."), FontId::new(vsize * 0.95, FontFamily::Name("serif".into())), mix(pal.accent, pal.text, 0.3));
+                }
+            }
+        }
+    }
+
+    if scroll_to_cursor {
+        let r = galley.pos_from_cursor(CCursor::new(buf.cursor)).translate(gpos.to_vec2());
+        ui.scroll_to_rect(r.expand2(vec2(0.0, 60.0)), Some(egui::Align::Center));
+    }
+
+    if output.response.clicked() && ui.input(|i| i.modifiers.command) {
+        if let Some(r) = output.cursor_range {
+            let ci = r.primary.index.0;
+            out.ctrl_click_line = Some(buf.text[..char_to_byte(&buf.text, ci)].matches('\n').count() + 1);
+        }
+    }
+    (output, galley, gpos)
+}
+
+fn apply_completion(buf: &mut Buffer, comp: &Completion, item: &CompItem) {
+    let (clean, mut caret) = match item.insert.find("$0") {
+        Some(p) => (item.insert.replacen("$0", "", 1), byte_to_char(&item.insert, p)),
+        None => (item.insert.clone(), item.insert.chars().count()),
+    };
+    // replace the typed prefix and the rest of the word under the cursor
+    let chars: Vec<char> = buf.text.chars().collect();
+    let mut end = buf.cursor.min(chars.len());
+    while end < chars.len() && (chars[end].is_alphanumeric() || "_-:.".contains(chars[end])) {
+        end += 1;
+    }
+    let mut ins = clean;
+    if matches!(comp.kind, CompKind::Cite | CompKind::Ref | CompKind::File) && chars.get(end) != Some(&'}') && !ins.contains('}') {
+        ins.push('}');
+        caret = ins.chars().count();
+    }
+    buf.replace_chars(comp.start, end, &ins);
+    buf.select(comp.start + caret, comp.start + caret);
+}
+
+fn comp_needs_scroll(ui: &egui::Ui, rect: Rect) -> bool {
+    !ui.clip_rect().contains_rect(rect)
+}

@@ -1,0 +1,114 @@
+% ────────────────────────────────────────────
+%  Masterprüfung — Präsentation (TU Graz)
+%  Literatur kommt aus derselben Bibliothek wie die Masterarbeit.
+% ────────────────────────────────────────────
+\documentclass[aspectratio=169, 11pt]{beamer}
+\usetheme{TUGraz}
+
+\usepackage[utf8]{inputenc}
+\usepackage{csquotes}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{pgfplots}\pgfplotsset{compat=1.18}
+% Literatur: biblatex + biber (natbib-Befehle wie \citep/\citet funktionieren weiter)
+\usepackage[backend=biber, style=authoryear, natbib=true, maxcitenames=2, uniquename=false]{biblatex}
+\addbibresource{references.bib}
+
+\title{Hopfen, Hefe, Hochgenuss}
+\subtitle{Gärtemperatur und Aroma obergäriger Biere -- Masterprüfung}
+\author{Norbert Winter}
+\institute{Institut für Brau- und Gärungstechnologie (fiktiv) \textbullet{} TU Graz}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\begin{frame}{Agenda}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation}
+
+\begin{frame}{Warum Bier?}
+  \begin{itemize}
+    \item Nur vier Zutaten -- und doch tausende Aromen
+    \item Ein Großteil des Aromas entsteht im \alert{Gärtank}
+    \item Systematische Daten zur Gärtemperatur fehlen \citep{malz2021ester}
+  \end{itemize}
+  \vspace{4mm}
+  \begin{block}{Forschungsfrage}
+    Wie stark prägt die Gärtemperatur das Aromaprofil obergäriger Biere?
+  \end{block}
+\end{frame}
+
+\section{Methodik}
+
+\begin{frame}{Vorgehen}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \begin{enumerate}
+        \item 12 Sude Pale Ale
+        \item 4 Temperaturstufen (16--24\,°C)
+        \item Gaschromatografie
+        \item Blindverkostung ($n=24$)
+      \end{enumerate}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{exampleblock}{Arrhenius-Ansatz}
+        \[ k(T) = A \cdot \exp\!\left(-\frac{E_a}{R\,T}\right) \]
+      \end{exampleblock}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\section{Ergebnisse}
+
+\begin{frame}{Esterbildung}
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[width=0.78\textwidth, height=5.4cm, xlabel={Gärtemperatur [°C]}, ylabel={mg/L},
+      grid=major, grid style={black!8}, legend pos=north west, legend style={draw=none, font=\small, fill=none},
+      every axis plot/.append style={very thick}]
+      \addplot[color=tured, mark=*] coordinates {(16,1.1) (18,1.5) (20,1.9) (22,2.6) (24,3.1)};
+      \addplot[color=tugray, mark=square*] coordinates {(16,0.4) (18,0.5) (20,0.6) (22,0.7) (24,0.8)};
+      \legend{Isoamylacetat (Banane), {Ethylhexanoat (Apfel, ×2)}}
+    \end{axis}
+  \end{tikzpicture}
+\end{frame}
+
+\begin{frame}{Verkostung}
+  \centering
+  \begin{tabular}{lrrr}
+    \toprule
+    Gärtemperatur & Fruchtigkeit & Sauberkeit & Gesamt \\
+    \midrule
+    16\,°C & 4{,}1 & 7{,}8 & 6{,}2 \\
+    \alert{18\,°C} & \alert{5{,}6} & \alert{7{,}2} & \alert{7{,}4} \\
+    20\,°C & 6{,}9 & 5{,}9 & 6{,}8 \\
+    24\,°C & 8{,}2 & 3{,}7 & 5{,}1 \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+\section{Fazit}
+
+\begin{frame}{Fazit \& Ausblick}
+  \begin{itemize}
+    \item<1-> +4\,K $\Rightarrow$ rund +38\,\% Isoamylacetat
+    \item<2-> 18\,°C ist der Sweet Spot für ein Pale Ale
+    \item<3-> Nächster Schritt: Kveik-Hefen und Temperaturprofile
+  \end{itemize}
+\end{frame}
+
+\danke
+
+% ── Backup / Anhang ──
+\begin{frame}{Literatur}
+  \scriptsize
+  \printbibliography[heading=none]
+\end{frame}
+
+\end{document}

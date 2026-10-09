@@ -1,0 +1,83 @@
+% ────────────────────────────────────────────
+%  Masterarbeit — Hauptdokument
+%  Kompilieren: Strg+S oder Strg+Enter  ·  Literatur: Bibliothek-Tab
+% ────────────────────────────────────────────
+\documentclass[
+  11pt, a4paper, twoside, openright,
+  parskip=half, headings=standardclasses, numbers=noenddot,
+  bibliography=totoc, listof=totoc
+]{scrreprt}
+
+% ── Sprache ─────────────────────────────────
+% Für korrekte deutsche Silbentrennung: Paket texlive-langgerman installieren.
+\IfFileExists{ngerman.ldf}{\usepackage[ngerman]{babel}}{%
+  \usepackage[english]{babel}%
+  \AtBeginDocument{\input{kapitel/deutsch-fallback}}}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{csquotes}
+
+% ── Schrift & Satz ──────────────────────────
+\usepackage{libertinus-type1}
+\usepackage[scale=0.92]{sourcesanspro}
+\usepackage{microtype}
+\usepackage[top=28mm, bottom=30mm, inner=30mm, outer=26mm]{geometry}
+\usepackage{setspace}\onehalfspacing
+\addtokomafont{disposition}{\sffamily}
+\addtokomafont{chapter}{\color{akzent}}
+
+% ── Mathematik, Grafik, Tabellen ────────────
+\usepackage{amsmath, amssymb, mathtools}
+\usepackage{graphicx}\graphicspath{{abbildungen/}}
+\usepackage{booktabs, tabularx}
+\usepackage[font=small, labelfont={bf,sf}]{caption}
+\usepackage{subcaption}
+\usepackage[locale=DE]{siunitx}
+\usepackage{xcolor}
+\definecolor{akzent}{HTML}{1F4E79}
+\usepackage{tikz}
+\usepackage{pgfplots}\pgfplotsset{compat=1.18}
+\usepackage[shortlabels]{enumitem}
+
+% ── Literatur (natbib + BibTeX) ─────────────
+\usepackage[round, authoryear]{natbib}
+\bibliographystyle{plainnat}
+
+% ── Links & Querverweise ────────────────────
+\usepackage[hidelinks, pdfusetitle]{hyperref}
+\usepackage[nameinlink, noabbrev, ngerman]{cleveref}
+
+% ── Metadaten ───────────────────────────────
+\newcommand{\arbeitstitel}{Titel der Masterarbeit}
+\newcommand{\untertitel}{Ein aussagekräftiger Untertitel}
+\newcommand{\autorin}{Norbert Winter}
+\newcommand{\betreuung}{Univ.-Prof. Dr. Vorname Nachname}
+\newcommand{\institut}{Institut für …}
+\newcommand{\universitaet}{Technische Universität Graz}
+\newcommand{\studium}{Masterstudium …}
+
+\title{\arbeitstitel}
+\author{\autorin}
+
+\begin{document}
+
+\input{kapitel/titelseite}
+
+\pagenumbering{roman}
+\input{kapitel/abstract}
+\tableofcontents
+\cleardoublepage
+\pagenumbering{arabic}
+
+\input{kapitel/einleitung}
+\input{kapitel/grundlagen}
+\input{kapitel/methodik}
+\input{kapitel/ergebnisse}
+\input{kapitel/fazit}
+
+\bibliography{references}
+
+\appendix
+\input{kapitel/anhang}
+
+\end{document}

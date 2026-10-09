@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: nedit-linux-x86_64, bin: nedit, archive: tar.gz }
+          - { os: windows-latest, name: nedit-windows-x86_64, bin: nedit.exe, archive: zip }
+          - { os: macos-latest, name: nedit-macos-arm64, bin: nedit, archive: tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux-Abhängigkeiten
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
+      - run: cargo build --release
+      - name: Paket schnüren
+        shell: bash
+        run: |
+          mkdir -p dist/${{ matrix.name }}
+          cp target/release/${{ matrix.bin }} README.md LICENSE dist/${{ matrix.name }}/
+          cp -r assets dist/${{ matrix.name }}/
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then 7z a ${{ matrix.name }}.zip ${{ matrix.name }}; else tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}; fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.name }}.${{ matrix.archive }}
