@@ -427,7 +427,8 @@ mod tests {
         let m = g.line_marks(&root, "main.tex", 1);
         assert!(m.iter().any(|x| x.kind == MarkKind::Added && x.start == 2), "{m:?}");
         GitState::restore_file(&root, &first, "main.tex").unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("main.tex")).unwrap(), "Version 1\n");
+        // git may convert line endings on Windows (core.autocrlf)
+        assert_eq!(std::fs::read_to_string(root.join("main.tex")).unwrap().replace("\r\n", "\n"), "Version 1\n");
         let _ = std::fs::remove_dir_all(root);
     }
 }
