@@ -48,6 +48,16 @@ und im Editor am Rand markiert.
 - Kompiliert mit `latexmk` (pdfLaTeX, XeLaTeX oder LuaLaTeX), auf Wunsch automatisch
 - Verständliche Hinweise, wenn z. B. `biber` oder ein Sprachpaket fehlt
 
+### ⌨️ Vim-Modus
+
+Im ⚙-Menü lässt sich die Eingabe von **Standard** auf **Vim** umstellen (gilt im Code-Modus –
+im visuellen Modus wären unsichtbare Befehlszeichen verwirrend). Unterstützt werden
+Normal/Insert/Visual/Visual-Line, Zähler, Bewegungen (`hjkl w b e W B E 0 ^ $ gg G f t ; , % { }`,
+`Ctrl-d/u`), Operatoren `d c y > <` mit Textobjekten (`iw aw i{ a{ i( i[ i" i$ ip` – z. B.
+`ci{` oder `di$` für LaTeX), `x X s S D C p P r J ~ o O i a I A`, `u`/`Ctrl-r`, `.`-Wiederholung,
+`/suche` mit `n`/`N` sowie `:w` (speichern & kompilieren), `:q`, `:wq`, `:{zeile}`,
+`:%s/alt/neu/g` und `:noh`. Der Modus steht als Badge in der Statusleiste.
+
 ### ⚡ Autovervollständigung
 
 <img src="docs/screenshots/autocomplete.png" alt="Autovervollständigung für Zitate">

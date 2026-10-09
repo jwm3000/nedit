@@ -679,6 +679,7 @@ pub struct EditorStyle<'a> {
 pub struct EditorOutput {
     pub changed: bool,
     pub ctrl_click_line: Option<usize>,
+    pub vim: Option<crate::vim::VimOut>,
 }
 
 fn toggle_comment(buf: &mut Buffer) {
@@ -716,9 +717,9 @@ fn toggle_comment(buf: &mut Buffer) {
     buf.select(sc, sc + len);
 }
 
-pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &CompletionSources) -> EditorOutput {
+pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &CompletionSources, mut vim: Option<&mut crate::vim::VimState>) -> EditorOutput {
     let ctx = ui.ctx().clone();
-    let mut out = EditorOutput { changed: false, ctrl_click_line: None };
+    let mut out = EditorOutput { changed: false, ctrl_click_line: None, vim: None };
     let has_focus = ctx.memory(|m| m.has_focus(buf.id));
 
     // keep cursor fresh from last frame state
@@ -729,9 +730,32 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
         }
     }
 
+    // ── vim emulation (code mode) ──
+    let mut vim_normal = false;
+    if has_focus {
+        if let Some(v) = vim.as_deref_mut() {
+            let vo = v.handle(&ctx, buf, buf.completion.is_some());
+            if vo.changed {
+                out.changed = true;
+                buf.completion = None;
+            }
+            // undo / redo through egui's TextEdit undoer
+            ctx.input_mut(|i| {
+                for _ in 0..vo.undo {
+                    i.events.push(egui::Event::Key { key: Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+                }
+                for _ in 0..vo.redo {
+                    i.events.push(egui::Event::Key { key: Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND | Modifiers::SHIFT });
+                }
+            });
+            vim_normal = v.mode != crate::vim::Mode::Insert;
+            out.vim = Some(vo);
+        }
+    }
+
     // ── key handling before the TextEdit sees the events ──
     let mut accept: Option<CompItem> = None;
-    if has_focus {
+    if has_focus && !vim_normal {
         if let Some(comp) = &mut buf.completion {
             let n = comp.items.len();
             ctx.input_mut(|i| {
@@ -940,6 +964,11 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
             let item = comp.items[i].clone();
             apply_completion(buf, &comp, &item);
             out.changed = true;
+        }
+    }
+    if let Some(v) = vim.as_deref() {
+        if has_focus || v.cmdline.is_some() {
+            vim_cmdline(ui, v, pal);
         }
     }
     out
@@ -1261,6 +1290,25 @@ fn editor_core(
         }
     }
     (output, galley, gpos)
+}
+
+/// Vim command line (":" / "/") drawn at the bottom of the editor.
+fn vim_cmdline(ui: &egui::Ui, v: &crate::vim::VimState, pal: &Palette) {
+    let Some(cl) = &v.cmdline else { return };
+    let clip = ui.clip_rect();
+    let r = Rect::from_min_max(pos2(clip.min.x + 12.0, clip.max.y - 40.0), pos2(clip.max.x - 12.0, clip.max.y - 10.0));
+    let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("vim-cmdline")));
+    p.rect_filled(r.translate(vec2(0.0, 3.0)), 8.0, with_alpha(Color32::BLACK, 60));
+    p.rect_filled(r, 8.0, pal.surface);
+    p.rect_stroke(r, 8.0, Stroke::new(1.0, pal.accent), egui::StrokeKind::Inside);
+    let g = p.layout_no_wrap(cl.clone(), FontId::new(14.0, FontFamily::Monospace), pal.bright);
+    let w = g.size().x;
+    p.galley(pos2(r.min.x + 12.0, r.center().y - g.size().y / 2.0), g, pal.bright);
+    let blink = (ui.input(|i| i.time) * 2.0) as i64 % 2 == 0;
+    if blink {
+        p.rect_filled(Rect::from_min_size(pos2(r.min.x + 13.0 + w, r.center().y - 8.0), vec2(8.0, 16.0)), 1.0, with_alpha(pal.accent, 200));
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
 }
 
 fn apply_completion(buf: &mut Buffer, comp: &Completion, item: &CompItem) {

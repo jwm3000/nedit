@@ -28,11 +28,13 @@ pub struct Settings {
     pub visual: bool,
     pub doc_width: f32,
     pub update_check: bool,
+    /// Editor input: standard or vim keybindings (code mode).
+    pub input_vim: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false }
     }
 }
 
@@ -202,6 +204,7 @@ pub struct App {
     pub collapsed: std::collections::HashSet<String>,
     shot_step: usize,
     shot_wait: bool,
+    debug_typed: usize,
     pub doc_mode: bool,
     pub doc_toc: bool,
     pub doc_pdf: bool,
@@ -216,6 +219,7 @@ pub struct App {
     pub updater: crate::updater::Updater,
     update_started: bool,
     pub close_requested: bool,
+    pub vim: crate::vim::VimState,
 }
 
 impl App {
@@ -269,6 +273,7 @@ impl App {
             collapsed: Default::default(),
             shot_step: 0,
             shot_wait: false,
+            debug_typed: 0,
             doc_mode: false,
             doc_toc: true,
             doc_pdf: false,
@@ -283,6 +288,7 @@ impl App {
             updater: Default::default(),
             update_started: false,
             close_requested: false,
+            vim: Default::default(),
         };
         crate::updater::cleanup();
         app.apply_style(&cc.egui_ctx);
@@ -1041,6 +1047,19 @@ impl App {
                             ui.set_min_width(260.0);
                             widgets::section_label(ui, "Editor", pal);
                             ui.horizontal(|ui| {
+                                ui.label("Eingabe");
+                                let mut ch = false;
+                                ch |= ui.selectable_value(&mut self.settings.input_vim, false, "Standard").changed();
+                                ch |= ui.selectable_value(&mut self.settings.input_vim, true, format!("{}  Vim", ic::TERMINAL)).changed();
+                                if ch {
+                                    self.settings.save();
+                                    self.vim = Default::default();
+                                }
+                            });
+                            if self.settings.input_vim {
+                                ui.label(egui::RichText::new("Vim gilt im Code-Modus; im visuellen Modus bleibt die Standardeingabe.").font(widgets::ui_font(11.0)).color(pal.dim));
+                            }
+                            ui.horizontal(|ui| {
                                 ui.label("Schriftgröße");
                                 if ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=24.0).step_by(0.5)).changed() {
                                     self.settings.save();
@@ -1067,7 +1086,24 @@ impl App {
                                     changed |= ui.selectable_value(&mut self.project.config.slides_engine, e.to_string(), e).changed();
                                 }
                             });
-                            widgets::section_label(ui, "nEdit", pal);
+                            widgets::section_label(ui, "Über nEdit", pal);
+                            egui::Frame::new().fill(pal.base).corner_radius(8).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), egui::Sense::hover());
+                                    ui.painter().rect_filled(r, 7.0, pal.accent);
+                                    ui.painter().text(r.center() + vec2(0.0, -1.0), Align2::CENTER_CENTER, "∂", widgets::display_font(18.0), pal.on_accent);
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(format!("nEdit {}", crate::updater::VERSION)).font(widgets::bold_font(13.5)).color(pal.bright));
+                                        ui.label(egui::RichText::new("LaTeX Studio").font(widgets::ui_font(11.0)).color(pal.dim));
+                                    });
+                                });
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new("Erstellt von Norbert Winter – zur Motivation, die Masterarbeit endlich fertigzustellen.").font(widgets::ui_font(12.5)).italics().color(pal.text));
+                                ui.add_space(4.0);
+                                ui.hyperlink_to(egui::RichText::new(format!("{}  github.com/jwm3000/nedit", ic::GLOBE)).font(widgets::ui_font(11.5)), "https://github.com/jwm3000/nedit");
+                            });
+                            widgets::section_label(ui, "Updates", pal);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Version {}", crate::updater::VERSION)).color(pal.subtext));
                                 if ui.add_enabled(!self.updater.checking, egui::Button::new(format!("{}  Nach Updates suchen", ic::REFRESH))).clicked() {
@@ -1187,6 +1223,22 @@ impl App {
                             if b.dirty() {
                                 ui.label(small(format!("{} ungespeichert", ic::CIRCLE), pal.yellow));
                             }
+                        }
+                    }
+                    let vim_active = self.settings.input_vim && self.tab != Tab::Shelf && !(doc == Tab::Thesis && self.settings.visual);
+                    if vim_active {
+                        let (mode, info) = self.vim.status();
+                        let col = match self.vim.mode {
+                            crate::vim::Mode::Normal => pal.accent,
+                            crate::vim::Mode::Insert => pal.green,
+                            _ => pal.magenta,
+                        };
+                        let g = ui.painter().layout_no_wrap(mode.clone(), widgets::bold_font(11.0), pal.on_accent);
+                        let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 14.0, 18.0), egui::Sense::hover());
+                        ui.painter().rect_filled(r, 4.0, col);
+                        ui.painter().galley(pos2(r.min.x + 7.0, r.center().y - g.size().y / 2.0), g, pal.on_accent);
+                        if !info.is_empty() {
+                            ui.label(small(info, pal.subtext));
                         }
                     }
                     if doc == Tab::Thesis {
@@ -1526,6 +1578,20 @@ impl App {
             if let Some(rel) = self.thesis.active.clone() {
                 self.thesis.sync_after = Some((rel.clone(), 0));
                 self.forward_sync(Tab::Thesis, &rel, 14, true, now);
+            }
+        }
+        if name.contains("vim") && !self.settings.input_vim {
+            self.settings.input_vim = true;
+            if let Some(b) = self.active_buffer_mut(Tab::Thesis) {
+                b.request_focus = true;
+            }
+        }
+        // type keys into the focused editor once per step: name like "vimtype=jjwve"
+        if let Some(keys) = name.split("type=").nth(1) {
+            if self.debug_typed != self.shot_step + 1 && now > at - 2.0 {
+                self.debug_typed = self.shot_step + 1;
+                let keys = keys.replace('_', " ");
+                ctx.input_mut(|i| i.events.push(egui::Event::Text(keys.clone())));
             }
         }
         if name.contains("newedit") && self.tree_ui.edit.is_none() {

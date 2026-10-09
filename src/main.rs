@@ -16,6 +16,7 @@ mod shelf;
 mod shelf_ui;
 mod theme;
 mod updater;
+mod vim;
 mod visual;
 mod widgets;
 mod workspace;

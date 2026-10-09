@@ -378,12 +378,43 @@ fn editor_body(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let marks = app.git.line_marks(&root, &rel, app.buffers[bi].disk_stamp);
     let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()) };
     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
-    let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src);
+    let use_vim = app.settings.input_vim && !visual;
+    let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src, if use_vim { Some(&mut app.vim) } else { None });
     if out.changed {
         app.buffers[bi].last_edit = now;
     }
     if let Some(line) = out.ctrl_click_line {
         app.forward_sync(t, &rel, line, true, now);
+    }
+    if let Some(vo) = out.vim {
+        apply_vim(app, ui.ctx(), vo, t, &rel, now);
+    }
+}
+
+/// Act on vim ex commands / yanks.
+fn apply_vim(app: &mut App, ctx: &egui::Context, vo: crate::vim::VimOut, t: Tab, rel: &str, now: f64) {
+    if let Some(y) = vo.yanked {
+        ctx.copy_text(y);
+    }
+    if let Some(q) = vo.search {
+        app.find.query = q;
+        app.find.open = true;
+    }
+    if vo.noh {
+        app.find.open = false;
+    }
+    if vo.save {
+        if let Some(i) = app.buffer_idx(rel) {
+            let line = app.buffers[i].line;
+            app.ws_mut(t).sync_after = Some((rel.to_string(), line));
+        }
+        app.save_all();
+        app.compile(t, ctx);
+        let g = app.pal.green;
+        app.toast(ic::SAVE, format!("{rel} gespeichert"), g, now);
+    }
+    if vo.close {
+        app.close_tab(rel, t);
     }
 }
 
@@ -1264,6 +1295,7 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
     let mut sync: Option<(String, usize)> = None;
     let mut open_code: Option<String> = None;
     let mut toggle: Option<String> = None;
+    let mut vim_actions: Vec<(String, crate::vim::VimOut)> = vec![];
     let mut new_width: Option<(f32, bool)> = None; // (width, drag finished)
     let width_setting = app.settings.doc_width;
     let font_size = app.settings.font_size;
@@ -1369,7 +1401,12 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
                     let marks = app.git.line_marks(&root, f, app.buffers[bi].disk_stamp);
                     let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()) };
                     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
-                    let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src);
+                    let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src, if app.settings.input_vim && !visual { Some(&mut app.vim) } else { None });
+                    if let Some(vo) = out.vim.as_ref() {
+                        if vo.save || vo.close || vo.search.is_some() || vo.noh || vo.yanked.is_some() {
+                            vim_actions.push((f.clone(), out.vim.clone().unwrap()));
+                        }
+                    }
                     let b = &mut app.buffers[bi];
                     b.doc_height = ui.cursor().min.y - top;
                     if out.changed {
@@ -1387,6 +1424,9 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
             });
         });
     });
+    for (f, vo) in vim_actions {
+        apply_vim(app, ui.ctx(), vo, Tab::Thesis, &f, now);
+    }
     if let Some((w, done)) = new_width {
         app.settings.doc_width = w;
         if done {
