@@ -1721,25 +1721,44 @@ impl App {
         }
         let mut open = true;
         let screen = ctx.content_rect();
-        egui::Window::new(egui::RichText::new(tr!("Über nEdit" | "About nEdit")).font(widgets::ui_font(13.0)).color(pal.text))
+        egui::Window::new("about")
             .id(egui::Id::new("about-window"))
-            .open(&mut open)
+            .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .movable(true)
-            .pivot(Align2::CENTER_CENTER)
-            .default_pos(screen.center())
+            .default_pos(screen.center() - vec2(198.0, 215.0))
             .frame(
                 egui::Frame::new()
                     .fill(pal.surface)
                     .stroke(Stroke::new(1.0, pal.border))
                     .corner_radius(14)
-                    .inner_margin(egui::Margin::same(22))
+                    .inner_margin(egui::Margin { left: 22, right: 10, top: 8, bottom: 22 })
                     .shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: with_alpha(Color32::BLACK, 120) }),
             )
             .show(ctx, |ui| {
-                ui.set_width(340.0);
+                ui.set_width(352.0);
+                // slim header: small title, close button; the whole window is draggable
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tr!("Über nEdit" | "About nEdit")).font(widgets::ui_font(11.0)).color(pal.dim));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::click());
+                        let resp = resp.on_hover_text(tr!("Schließen (Esc)" | "Close (Esc)"));
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 6.0, with_alpha(pal.text, 22));
+                        }
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, ic::TIMES, widgets::ui_font(10.5), if resp.hovered() { pal.text } else { pal.dim });
+                        if resp.clicked() {
+                            open = false;
+                        }
+                    });
+                });
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    open = false;
+                }
+                ui.add_space(2.0);
                 ui.vertical_centered(|ui| {
+                    ui.set_max_width(340.0);
                     let (r, _) = ui.allocate_exact_size(vec2(84.0, 84.0), egui::Sense::hover());
                     ui.painter().rect_filled(r.translate(vec2(0.0, 4.0)), 22.0, with_alpha(pal.accent, 50));
                     ui.painter().rect_filled(r, 22.0, pal.accent);
