@@ -1367,12 +1367,28 @@ impl App {
                     // right side
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // settings
-                        if widgets::icon_button(ui, ic::COG, tr!("Einstellungen" | "Settings"), pal, self.settings_open && self.settings_page != crate::settings_ui::Page::Appearance).clicked() {
-                            self.open_settings(None, &ctx);
+                        // quick menus; "All settings …" inside opens the big window
+                        let shot_menu = std::env::var("NEDIT_SHOT").ok().and_then(|v| v.split(',').nth(self.shot_step).map(|t| if t.contains("cogmenu") { 1 } else if t.contains("brushmenu") { 2 } else { 0 })).unwrap_or(0);
+                        let resp = widgets::icon_button(ui, ic::COG, tr!("Einstellungen" | "Settings"), pal, false);
+                        let mut m = egui::Popup::menu(&resp);
+                        if shot_menu == 1 {
+                            m = m.open_memory(egui::SetOpenCommand::Bool(true));
                         }
-                        if widgets::icon_button(ui, ic::BRUSH, tr!("Theme & Darstellung" | "Theme & appearance"), pal, self.settings_open && self.settings_page == crate::settings_ui::Page::Appearance).clicked() {
-                            self.open_settings(Some(crate::settings_ui::Page::Appearance), &ctx);
+                        m
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .frame(crate::settings_ui::menu_frame(pal))
+                            .gap(8.0)
+                            .show(|ui| self.settings_menu(ui, pal, &ctx));
+                        let resp = widgets::icon_button(ui, ic::BRUSH, tr!("Theme" | "Theme"), pal, false);
+                        let mut m = egui::Popup::menu(&resp);
+                        if shot_menu == 2 {
+                            m = m.open_memory(egui::SetOpenCommand::Bool(true));
                         }
+                        m
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .frame(crate::settings_ui::menu_frame(pal))
+                            .gap(8.0)
+                            .show(|ui| self.theme_menu(ui, pal, &ctx));
                         if self.updater.installed {
                             if widgets::button(ui, ic::REFRESH, tr!("Neu starten" | "Restart"), pal, BtnKind::Primary).on_hover_text(tr!("Update installiert – nEdit neu starten" | "Update installed – restart nEdit")).clicked() {
                                 self.save_all();

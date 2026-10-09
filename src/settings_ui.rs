@@ -576,3 +576,248 @@ impl App {
         });
     }
 }
+
+// ───────────────────────────── compact menus (brush / cog) ─────────────────────────────
+
+/// Small theme tile for the quick menu.
+fn theme_tile(ui: &mut Ui, pal: &Palette, t: &Palette, name: &str, selected: bool, w: f32) -> bool {
+    let ph = w * 0.62;
+    let (r, resp) = ui.allocate_exact_size(vec2(w, ph + 22.0), Sense::click());
+    if !ui.is_rect_visible(r) {
+        return resp.clicked();
+    }
+    let hover = ui.ctx().animate_bool(resp.id.with("h"), resp.hovered());
+    let prev = Rect::from_min_size(r.min, vec2(w, ph));
+    let p = ui.painter();
+    theme_preview(p, prev, t);
+    // round the bottom of the preview
+    p.rect_stroke(prev, CornerRadius { nw: 10, ne: 10, sw: 6, se: 6 }, Stroke::new(1.0, with_alpha(pal.border, 120)), StrokeKind::Inside);
+    if selected || hover > 0.0 {
+        let s = if selected { Stroke::new(2.0, pal.accent) } else { Stroke::new(1.5, with_alpha(pal.text, (80.0 * hover) as u8)) };
+        p.rect_stroke(prev.expand(2.5), 12.0, s, StrokeKind::Outside);
+    }
+    if selected {
+        let c = pos2(prev.max.x - 10.0, prev.max.y - 10.0);
+        p.circle_filled(c, 7.5, pal.accent);
+        p.text(c, Align2::CENTER_CENTER, ic::CHECK, widgets::ui_font(8.0), pal.on_accent);
+    }
+    let g = p.layout_no_wrap(name.to_string(), widgets::ui_font(11.0), if selected { pal.bright } else { pal.subtext });
+    let tx = (r.center().x - g.size().x / 2.0).max(r.min.x);
+    p.with_clip_rect(r).galley(pos2(tx, prev.max.y + 5.0), g, pal.text);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.on_hover_text(name).clicked()
+}
+
+/// Compact menu row: icon, label, optional hint on the right. Returns the response.
+fn menu_row(ui: &mut Ui, pal: &Palette, icon: &str, label: &str, hint: &str) -> egui::Response {
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 34.0), Sense::click());
+    let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
+    if hov > 0.0 {
+        ui.painter().rect_filled(r, 8.0, with_alpha(pal.text, (14.0 * hov) as u8));
+    }
+    let ir = Rect::from_center_size(pos2(r.min.x + 17.0, r.center().y), vec2(24.0, 24.0));
+    ui.painter().rect_filled(ir, 7.0, with_alpha(pal.text, 14));
+    ui.painter().text(ir.center(), Align2::CENTER_CENTER, icon, widgets::ui_font(11.5), pal.subtext);
+    ui.painter().text(pos2(r.min.x + 38.0, r.center().y), Align2::LEFT_CENTER, label, widgets::ui_font(13.0), pal.text);
+    if !hint.is_empty() {
+        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, hint, widgets::ui_font(11.0), pal.dim);
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// Label on the left, control on the right – one compact line.
+fn menu_line(ui: &mut Ui, pal: &Palette, label: &str, control: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width();
+    ui.allocate_ui_with_layout(vec2(w, 36.0), egui::Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_height(36.0);
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(label).font(widgets::ui_font(13.0)).color(pal.text));
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), control);
+    });
+}
+
+fn menu_section(ui: &mut Ui, pal: &Palette, text: &str) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(text.to_uppercase()).font(widgets::ui_font(10.0)).color(pal.dim).extra_letter_spacing(1.2));
+    });
+    ui.add_space(2.0);
+}
+
+/// Footer button that opens the big settings window.
+fn menu_footer(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
+    ui.add_space(4.0);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(r, 0.0, with_alpha(pal.border, 90));
+    ui.add_space(6.0);
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 34.0), Sense::click());
+    let hov = ui.ctx().animate_bool(resp.id, resp.hovered());
+    ui.painter().rect_filled(r, 9.0, with_alpha(pal.accent, (26.0 + 30.0 * hov) as u8));
+    ui.painter().text(pos2(r.min.x + 14.0, r.center().y), Align2::LEFT_CENTER, format!("{}  {label}", ic::COG), widgets::bold_font(12.5), mix(pal.accent, pal.bright, 0.3));
+    ui.painter().text(pos2(r.max.x - 12.0, r.center().y), Align2::RIGHT_CENTER, ic::CHEVRON_RIGHT, widgets::ui_font(11.0), pal.accent);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
+}
+
+/// Styled frame for the quick menus.
+pub fn menu_frame(pal: &Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(pal.surface)
+        .stroke(Stroke::new(1.0, with_alpha(pal.border, 170)))
+        .corner_radius(14)
+        .inner_margin(egui::Margin::same(12))
+        .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: with_alpha(Color32::BLACK, 110) })
+}
+
+impl App {
+    /// Brush button: quick theme picker.
+    pub fn theme_menu(&mut self, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
+        let width = 318.0;
+        ui.set_width(width);
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Theme").font(widgets::display_font(18.0)).color(pal.bright));
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                ui.label(egui::RichText::new(self.pal.name.clone()).font(widgets::ui_font(11.5)).color(pal.dim));
+            });
+        });
+        ui.add_space(4.0);
+        let omarchy = theme::omarchy_installed();
+        let follow = self.settings.theme.is_none();
+        if omarchy {
+            let cur = theme::current_omarchy_name().map(|n| theme::pretty_name(&n)).unwrap_or_default();
+            let mut on = follow;
+            menu_line(ui, pal, &format!("{}  {}", ic::MAGIC, tr!("Omarchy folgen" | "Follow Omarchy")), |ui| {
+                if toggle(ui, &mut on, pal).changed() {
+                    if on {
+                        self.set_theme(None, ctx);
+                    } else {
+                        let name = theme::current_omarchy_name();
+                        self.set_theme(name.or(Some("nedit".into())), ctx);
+                    }
+                }
+                ui.label(egui::RichText::new(cur).font(widgets::ui_font(11.0)).color(pal.dim));
+            });
+            ui.add_space(4.0);
+        }
+        let mut list: Vec<(String, String)> = vec![("nedit".into(), "nEdit Ink".into())];
+        list.extend(theme::all_theme_names().into_iter().map(|n| (n.clone(), theme::pretty_name(&n))));
+        let cols = 3;
+        let gap = 10.0;
+        let tw = (width - 8.0 - gap * (cols as f32 - 1.0)) / cols as f32;
+        let mut picked = None;
+        egui::ScrollArea::vertical().max_height(330.0).auto_shrink([false, true]).show(ui, |ui| {
+            ui.add_space(4.0);
+            for chunk in list.chunks(cols) {
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (key, label) in chunk {
+                        let p = if key == "nedit" { Some(Palette::default_dark()) } else { cached_palette(ctx, key) };
+                        let Some(p) = p else { continue };
+                        let selected = self.settings.theme.as_deref() == Some(key.as_str()) || (key == "nedit" && follow && !omarchy);
+                        if theme_tile(ui, pal, &p, label, selected, tw) {
+                            picked = Some(key.clone());
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+            }
+        });
+        if let Some(k) = picked {
+            self.set_theme(Some(k), ctx);
+        }
+        if menu_footer(ui, pal, tr!("Alle Einstellungen …" | "All settings …")) {
+            self.open_settings(Some(Page::Appearance), ctx);
+            ui.close();
+        }
+    }
+
+    /// Cog button: the most used settings at a glance.
+    pub fn settings_menu(&mut self, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
+        ui.set_width(318.0);
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tr!("Einstellungen" | "Settings")).font(widgets::display_font(18.0)).color(pal.bright));
+        });
+        menu_section(ui, pal, "Editor");
+        let cur = self.settings.input_vim as usize;
+        let mut pick = None;
+        menu_line(ui, pal, tr!("Eingabe" | "Input"), |ui| {
+            pick = segmented(ui, &[("", "Standard"), (ic::TERMINAL, "Vim")], cur, pal, Id::new("menu-seg-input"));
+        });
+        if let Some(i) = pick {
+            self.settings.input_vim = i == 1;
+            self.vim = Default::default();
+            self.settings.save();
+        }
+        let mut fs = self.settings.font_size;
+        menu_line(ui, pal, tr!("Schrift" | "Font"), |ui| {
+            if widgets::fancy_slider(ui, &mut fs, 10.0, 24.0, 0.5, "pt", pal).changed() {
+                self.settings.font_size = fs;
+                self.settings.save();
+            }
+        });
+        let mut auto = self.settings.auto_compile;
+        menu_line(ui, pal, tr!("Automatisch kompilieren" | "Compile automatically"), |ui| {
+            if toggle(ui, &mut auto, pal).changed() {
+                self.settings.auto_compile = auto;
+                self.settings.save();
+            }
+        });
+        let mut dark = self.settings.dark_pdf;
+        menu_line(ui, pal, tr!("PDF abdunkeln" | "Dim PDF"), |ui| {
+            if toggle(ui, &mut dark, pal).changed() {
+                self.settings.dark_pdf = dark;
+                self.settings.save();
+                self.thesis.viewer.dark_pages = dark && pal.dark;
+            }
+        });
+        menu_section(ui, pal, tr!("Sprache" | "Language"));
+        let cur = self.settings.lang_en as usize;
+        let mut pick = None;
+        menu_line(ui, pal, tr!("Oberfläche" | "Interface"), |ui| {
+            pick = segmented(ui, &[("", "Deutsch"), ("", "English")], cur, pal, Id::new("menu-seg-lang"));
+        });
+        if let Some(i) = pick {
+            self.settings.lang_en = i == 1;
+            crate::i18n::set_english(self.settings.lang_en);
+            self.settings.save();
+        }
+        ui.add_space(4.0);
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+        ui.painter().rect_filled(r, 0.0, with_alpha(pal.border, 90));
+        ui.add_space(4.0);
+        if menu_row(ui, pal, ic::BOOKMARK, tr!("Hilfe & Tastenkürzel" | "Help & shortcuts"), "F1").clicked() {
+            self.help_open = true;
+            ui.close();
+        }
+        let upd_hint = if self.updater.available.is_some() { tr!("Update verfügbar" | "Update available").to_string() } else { format!("v{}", crate::updater::VERSION) };
+        if menu_row(ui, pal, ic::REFRESH, tr!("Nach Updates suchen" | "Check for updates"), &upd_hint).clicked() {
+            if self.updater.available.is_some() {
+                self.dialog = Some(Dialog::Update);
+            } else {
+                self.updater.check(true, ctx);
+            }
+            ui.close();
+        }
+        if menu_row(ui, pal, ic::GRADUATION, tr!("Über nEdit" | "About nEdit"), "").clicked() {
+            self.about_open = true;
+            ui.close();
+        }
+        if menu_footer(ui, pal, tr!("Alle Einstellungen …" | "All settings …")) {
+            self.open_settings(None, ctx);
+            ui.close();
+        }
+    }
+}
