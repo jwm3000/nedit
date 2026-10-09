@@ -96,7 +96,13 @@ pub fn slides_ui(app: &mut App, ui: &mut Ui, now: f64) {
         .show_separator_line(false)
         .frame(Frame::new().fill(pal.crust))
         .show(ui, |ui| stage(app, ui, &pal, now));
-    egui::CentralPanel::default().frame(Frame::new().fill(pal.base)).show(ui, |ui| editor_area(app, ui, &pal, Tab::Slides, now));
+    egui::CentralPanel::default().frame(Frame::new().fill(pal.base)).show(ui, |ui| {
+        if app.settings.slides_visual {
+            app.slide_editor_ui(ui, now);
+        } else {
+            editor_area(app, ui, &pal, Tab::Slides, now);
+        }
+    });
     if let Some(f) = splitter(ui, panel.response.rect, w, &pal, "split-stage") {
         app.settings.stage_frac = (app.settings.stage_frac + f).clamp(0.2, 0.8);
         if f == 0.0 {
@@ -457,7 +463,8 @@ fn editor_body(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let visual = t == Tab::Thesis && app.settings.visual;
     let root = app.project.root.clone();
     let marks = app.git.line_marks(&root, &rel, app.buffers[bi].disk_stamp);
-    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()) };
+    let numbers = if visual { app.heading_numbers(&rel) } else { HashMap::new() };
+    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()), cite_labels: &app.cite_labels, heading_numbers: &numbers };
     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
     let use_vim = app.settings.input_vim && !visual;
     let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src, if use_vim { Some(&mut app.vim) } else { None });
@@ -580,6 +587,15 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         let r = right.allocate_exact_size(vec2(10.0, 20.0), Sense::hover()).0;
         right.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
         view_switch(app, &mut right, pal, &ctx, inner.width() < 640.0);
+    }
+    if t == Tab::Slides {
+        let r = right.allocate_exact_size(vec2(10.0, 20.0), Sense::hover()).0;
+        right.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
+        if widgets::chip(&mut right, ic::EYE, tr!("Visuell" | "Visual"), false, pal.accent, pal).on_hover_text(tr!("Folien wie in PowerPoint bearbeiten" | "Edit slides like in PowerPoint")).clicked() {
+            app.settings.slides_visual = true;
+            app.settings.save();
+        }
+        widgets::chip(&mut right, ic::CODE, "Code", true, pal.accent, pal);
     }
     let left_edge = right.min_rect().min.x - 8.0;
     let left_rect = Rect::from_min_max(inner.min, pos2(left_edge.max(inner.min.x), inner.max.y));
@@ -1487,7 +1503,8 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
                     }
                     let root = app.project.root.clone();
                     let marks = app.git.line_marks(&root, f, app.buffers[bi].disk_stamp);
-                    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()) };
+                    let numbers = if visual { app.heading_numbers(f) } else { HashMap::new() };
+                    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()), cite_labels: &app.cite_labels, heading_numbers: &numbers };
                     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
                     let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src, if app.settings.input_vim && !visual { Some(&mut app.vim) } else { None });
                     if let Some(vo) = out.vim.as_ref() {

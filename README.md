@@ -69,6 +69,14 @@ Präfixe: `#` Gliederung, `@` Literatur, `>` Befehle, `:42` springt zu Zeile 42.
 
 <img src="docs/screenshots/schnellsuche.png" alt="Schnellsuche">
 
+### ⚡ Autovervollständigung & smartes Tippen
+
+Wie bei Overleaf: Nach `\begin{itemize}` + Enter steht das passende `\end{itemize}` schon da
+(bei Listen mit erstem `\item`, bei Abbildungen und Tabellen mit Gerüst). Klammern werden
+paarweise gesetzt, Enter setzt Listen fort und behält die Einrückung. Die Vorschläge kennen
+über 100 Befehle mit Beschreibung, gängige Pakete, Labels mit ihrem Typ (Abbildung, Tabelle …)
+und die Befehle, die du selbst im Dokument verwendest – sortiert nach Häufigkeit.
+
 ### ⚡ Autovervollständigung
 
 <img src="docs/screenshots/autocomplete.png" alt="Autovervollständigung für Zitate">
@@ -119,6 +127,11 @@ Ein eigener Arbeitsbereich für die Folien mit dem **TU-Graz-Beamer-Theme**:
 Filmstreifen aller Folien, Editor mit Folien-Bausteinen (Folie, zwei Spalten, Bildfolie,
 schrittweise Aufzählung, Block, Formel …) und eine Bühne, die automatisch die Folie unter
 dem Cursor zeigt. Die Literatur kommt aus derselben Bibliothek wie die Arbeit.
+
+**Visueller Folien-Editor:** Mit „Visuell“ bearbeitest du die Folien direkt wie in PowerPoint –
+Titel, Aufzählungen (Enter = neuer Punkt, Tab = einrücken), Blöcke, Bilder, Spalten, Formeln
+und Pausen. nEdit schreibt dabei sauberes, eingerücktes LaTeX nur für die bearbeitete Folie;
+was der Editor nicht kennt (z. B. TikZ-Diagramme), bleibt unverändert als LaTeX-Baustein.
 
 <img src="docs/screenshots/praesentieren.png" alt="Präsentationsmodus">
 

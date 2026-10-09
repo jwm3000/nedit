@@ -16,6 +16,8 @@ pub struct Buffer {
     pub disk_stamp: u64,
     pub id: egui::Id,
     pending_select: Option<(usize, usize)>,
+    /// Scroll the new cursor into view (false for small in-place edits while typing).
+    pending_scroll: bool,
     init_cursor: bool,
     pub cursor: usize,
     pub sel_end: usize,
@@ -62,6 +64,7 @@ impl Buffer {
             text,
             id: egui::Id::new(("buffer", rel.to_string())),
             pending_select: None,
+            pending_scroll: false,
             init_cursor: true,
             cursor: 0,
             sel_end: 0,
@@ -140,7 +143,19 @@ impl Buffer {
     /// Select a char range and scroll it into view on the next frame.
     pub fn select(&mut self, a: usize, b: usize) {
         self.pending_select = Some((a, b));
+        self.pending_scroll = true;
         self.request_focus = true;
+    }
+
+    /// Where the cursor is (or will be after a pending jump).
+    pub fn target_cursor(&self) -> usize {
+        self.pending_select.map_or(self.cursor, |p| p.1)
+    }
+
+    /// Move the cursor without scrolling the view (used while typing).
+    pub fn place_cursor(&mut self, a: usize, b: usize) {
+        self.pending_select = Some((a, b));
+        self.pending_scroll = false;
     }
 
     pub fn goto_line(&mut self, line: usize) {
@@ -514,67 +529,160 @@ pub const ENVIRONMENTS: &[&str] = &[
     "tikzpicture", "axis", "subfigure", "lstlisting", "verbatim", "gather", "cases", "pmatrix", "bmatrix", "theorem", "proof",
 ];
 
-pub const COMMANDS: &[(&str, &str)] = &[
-    ("section", "section{$0}"),
-    ("subsection", "subsection{$0}"),
-    ("subsubsection", "subsubsection{$0}"),
-    ("chapter", "chapter{$0}"),
-    ("paragraph", "paragraph{$0}"),
-    ("textbf", "textbf{$0}"),
-    ("textit", "textit{$0}"),
-    ("emph", "emph{$0}"),
-    ("texttt", "texttt{$0}"),
-    ("underline", "underline{$0}"),
-    ("enquote", "enquote{$0}"),
-    ("cite", "cite{$0}"),
-    ("citep", "citep{$0}"),
-    ("citet", "citet{$0}"),
-    ("ref", "ref{$0}"),
-    ("cref", "cref{$0}"),
-    ("Cref", "Cref{$0}"),
-    ("eqref", "eqref{$0}"),
-    ("label", "label{$0}"),
-    ("footnote", "footnote{$0}"),
-    ("includegraphics", "includegraphics[width=\\linewidth]{$0}"),
-    ("caption", "caption{$0}"),
-    ("centering", "centering"),
-    ("item", "item $0"),
-    ("frac", "frac{$0}{}"),
-    ("sqrt", "sqrt{$0}"),
-    ("sum", "sum_{$0}^{}"),
-    ("int", "int_{$0}^{}"),
-    ("mathbb", "mathbb{$0}"),
-    ("mathcal", "mathcal{$0}"),
-    ("mathrm", "mathrm{$0}"),
-    ("left", "left( $0 \\right)"),
-    ("input", "input{$0}"),
-    ("frametitle", "frametitle{$0}"),
-    ("pause", "pause"),
-    ("alert", "alert{$0}"),
-    ("url", "url{$0}"),
-    ("href", "href{$0}{}"),
-    ("num", "num{$0}"),
-    ("SI", "SI{$0}{}"),
-    ("toprule", "toprule"),
-    ("midrule", "midrule"),
-    ("bottomrule", "bottomrule"),
-    ("newpage", "newpage"),
-    ("clearpage", "clearpage"),
-    ("tableofcontents", "tableofcontents"),
-    ("vspace", "vspace{$0}"),
-    ("hspace", "hspace{$0}"),
-    ("textwidth", "textwidth"),
-    ("linewidth", "linewidth"),
-    ("dots", "dots"),
-    ("alpha", "alpha"),
-    ("beta", "beta"),
-    ("gamma", "gamma"),
-    ("delta", "delta"),
-    ("lambda", "lambda"),
-    ("theta", "theta"),
-    ("sigma", "sigma"),
-    ("mu", "mu"),
+/// Command completions: (name, inserted text with `$0` cursor, description DE, description EN).
+pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
+    ("section", "section{$0}", "Abschnitt", "Section"),
+    ("subsection", "subsection{$0}", "Unterabschnitt", "Subsection"),
+    ("subsubsection", "subsubsection{$0}", "Unter-Unterabschnitt", "Subsubsection"),
+    ("chapter", "chapter{$0}", "Kapitel", "Chapter"),
+    ("paragraph", "paragraph{$0}", "Absatzüberschrift", "Paragraph heading"),
+    ("textbf", "textbf{$0}", "Fett", "Bold"),
+    ("textit", "textit{$0}", "Kursiv", "Italic"),
+    ("emph", "emph{$0}", "Hervorhebung", "Emphasis"),
+    ("texttt", "texttt{$0}", "Schreibmaschine", "Monospace"),
+    ("textsc", "textsc{$0}", "Kapitälchen", "Small caps"),
+    ("underline", "underline{$0}", "Unterstrichen", "Underline"),
+    ("enquote", "enquote{$0}", "Anführungszeichen", "Quotation marks"),
+    ("footnote", "footnote{$0}", "Fußnote", "Footnote"),
+    ("cite", "cite{$0}", "Zitat", "Citation"),
+    ("citep", "citep{$0}", "Zitat (Autor, Jahr)", "Citation (Author, Year)"),
+    ("citet", "citet{$0}", "Zitat Autor (Jahr)", "Citation Author (Year)"),
+    ("parencite", "parencite{$0}", "Zitat in Klammern", "Parenthetical citation"),
+    ("textcite", "textcite{$0}", "Zitat im Text", "Textual citation"),
+    ("ref", "ref{$0}", "Verweis (Nummer)", "Reference (number)"),
+    ("cref", "cref{$0}", "Verweis mit Typ", "Reference with type"),
+    ("Cref", "Cref{$0}", "Verweis mit Typ (Satzanfang)", "Reference with type (capitalised)"),
+    ("eqref", "eqref{$0}", "Gleichungsverweis", "Equation reference"),
+    ("pageref", "pageref{$0}", "Seitenverweis", "Page reference"),
+    ("label", "label{$0}", "Marke für Verweise", "Label for references"),
+    ("includegraphics", "includegraphics[width=0.8\\linewidth]{$0}", "Bild einbinden", "Include image"),
+    ("caption", "caption{$0}", "Beschriftung", "Caption"),
+    ("centering", "centering", "Zentrieren", "Center"),
+    ("item", "item $0", "Listenpunkt", "List item"),
+    ("input", "input{$0}", "Datei einfügen", "Input file"),
+    ("include", "include{$0}", "Kapiteldatei einbinden", "Include chapter file"),
+    ("usepackage", "usepackage{$0}", "Paket laden", "Load package"),
+    ("newcommand", "newcommand{\\$0}{}", "Eigener Befehl", "New command"),
+    ("frac", "frac{$0}{}", "Bruch", "Fraction"),
+    ("sqrt", "sqrt{$0}", "Wurzel", "Square root"),
+    ("sum", "sum_{$0}^{}", "Summe", "Sum"),
+    ("prod", "prod_{$0}^{}", "Produkt", "Product"),
+    ("int", "int_{$0}^{}", "Integral", "Integral"),
+    ("lim", "lim_{$0}", "Grenzwert", "Limit"),
+    ("mathbb", "mathbb{$0}", "Zahlenmengen (ℝ, ℕ …)", "Blackboard bold"),
+    ("mathcal", "mathcal{$0}", "Kalligrafisch", "Calligraphic"),
+    ("mathrm", "mathrm{$0}", "Aufrecht in Mathe", "Upright in math"),
+    ("text", "text{$0}", "Text in Formel", "Text in math"),
+    ("left", "left( $0 \\right)", "Wachsende Klammern", "Scaling brackets"),
+    ("cdot", "cdot", "Malpunkt ·", "Center dot ·"),
+    ("times", "times", "Kreuz ×", "Times ×"),
+    ("approx", "approx", "≈", "≈"),
+    ("leq", "leq", "≤", "≤"),
+    ("geq", "geq", "≥", "≥"),
+    ("neq", "neq", "≠", "≠"),
+    ("infty", "infty", "∞", "∞"),
+    ("rightarrow", "rightarrow", "→", "→"),
+    ("Rightarrow", "Rightarrow", "⇒", "⇒"),
+    ("alpha", "alpha", "α", "α"),
+    ("beta", "beta", "β", "β"),
+    ("gamma", "gamma", "γ", "γ"),
+    ("delta", "delta", "δ", "δ"),
+    ("epsilon", "epsilon", "ε", "ε"),
+    ("lambda", "lambda", "λ", "λ"),
+    ("mu", "mu", "μ", "μ"),
+    ("pi", "pi", "π", "π"),
+    ("sigma", "sigma", "σ", "σ"),
+    ("theta", "theta", "θ", "θ"),
+    ("omega", "omega", "ω", "ω"),
+    ("url", "url{$0}", "Link", "URL"),
+    ("href", "href{$0}{}", "Link mit Text", "Link with text"),
+    ("num", "num{$0}", "Zahl (siunitx)", "Number (siunitx)"),
+    ("SI", "SI{$0}{}", "Wert mit Einheit (siunitx)", "Value with unit (siunitx)"),
+    ("toprule", "toprule", "Tabellenlinie oben", "Top rule"),
+    ("midrule", "midrule", "Tabellenlinie Mitte", "Mid rule"),
+    ("bottomrule", "bottomrule", "Tabellenlinie unten", "Bottom rule"),
+    ("hline", "hline", "Horizontale Linie", "Horizontal line"),
+    ("newpage", "newpage", "Neue Seite", "New page"),
+    ("clearpage", "clearpage", "Neue Seite (Gleitobjekte ausgeben)", "Clear page"),
+    ("tableofcontents", "tableofcontents", "Inhaltsverzeichnis", "Table of contents"),
+    ("listoffigures", "listoffigures", "Abbildungsverzeichnis", "List of figures"),
+    ("listoftables", "listoftables", "Tabellenverzeichnis", "List of tables"),
+    ("printbibliography", "printbibliography", "Literaturverzeichnis", "Bibliography"),
+    ("vspace", "vspace{$0}", "Vertikaler Abstand", "Vertical space"),
+    ("hspace", "hspace{$0}", "Horizontaler Abstand", "Horizontal space"),
+    ("noindent", "noindent", "Kein Einzug", "No indent"),
+    ("textwidth", "textwidth", "Textbreite", "Text width"),
+    ("linewidth", "linewidth", "Zeilenbreite", "Line width"),
+    ("ldots", "ldots", "Auslassung …", "Ellipsis …"),
+    ("dots", "dots", "Auslassung …", "Ellipsis …"),
+    ("textdegree", "textdegree", "Grad °", "Degree °"),
+    ("frametitle", "frametitle{$0}", "Folientitel", "Frame title"),
+    ("framesubtitle", "framesubtitle{$0}", "Folienuntertitel", "Frame subtitle"),
+    ("pause", "pause", "Schrittweise aufdecken", "Reveal step by step"),
+    ("alert", "alert{$0}", "Hervorheben (Folie)", "Alert (slide)"),
+    ("only", "only<$0>{}", "Nur auf Folie …", "Only on overlay …"),
+    ("onslide", "onslide<$0>{}", "Ab Folie …", "On overlay …"),
+    ("maketitle", "maketitle", "Titel setzen", "Make title"),
+    ("appendix", "appendix", "Anhang beginnen", "Start appendix"),
+    ("todo", "todo{$0}", "Notiz am Rand (todonotes)", "Margin note (todonotes)"),
 ];
+
+/// Common packages for `\usepackage{…}`.
+pub const PACKAGES: &[(&str, &str, &str)] = &[
+    ("amsmath", "Mathematik-Umgebungen", "Math environments"),
+    ("amssymb", "Mathe-Symbole", "Math symbols"),
+    ("mathtools", "Erweiterungen zu amsmath", "amsmath extensions"),
+    ("graphicx", "Bilder einbinden", "Include images"),
+    ("booktabs", "Schöne Tabellenlinien", "Nice table rules"),
+    ("tabularx", "Tabellen mit fester Breite", "Fixed-width tables"),
+    ("siunitx", "Zahlen und Einheiten", "Numbers and units"),
+    ("hyperref", "Links im PDF", "Links in the PDF"),
+    ("cleveref", "Verweise mit Typ (\\cref)", "Typed references (\\cref)"),
+    ("biblatex", "Literaturverzeichnis", "Bibliography"),
+    ("natbib", "Zitierbefehle \\citep/\\citet", "Citation commands"),
+    ("csquotes", "Anführungszeichen (\\enquote)", "Quotation marks"),
+    ("babel", "Sprachen und Silbentrennung", "Languages and hyphenation"),
+    ("geometry", "Seitenränder", "Page margins"),
+    ("xcolor", "Farben", "Colors"),
+    ("tikz", "Grafiken zeichnen", "Drawings"),
+    ("pgfplots", "Diagramme", "Plots"),
+    ("listings", "Quellcode", "Source code"),
+    ("minted", "Quellcode mit Syntaxhervorhebung", "Highlighted source code"),
+    ("subcaption", "Teilabbildungen", "Subfigures"),
+    ("caption", "Beschriftungen anpassen", "Caption styles"),
+    ("enumitem", "Listen anpassen", "List layout"),
+    ("microtype", "Feinere Typografie", "Micro-typography"),
+    ("todonotes", "Randnotizen", "Margin notes"),
+    ("float", "Gleitobjekte fixieren [H]", "Float placement [H]"),
+    ("acronym", "Abkürzungsverzeichnis", "Acronyms"),
+    ("glossaries", "Glossar", "Glossary"),
+    ("lipsum", "Blindtext", "Dummy text"),
+];
+
+fn desc(de: &'static str, en: &'static str) -> String {
+    if crate::i18n::en() { en.to_string() } else { de.to_string() }
+}
+
+/// Kind of a label, guessed from its prefix (fig:, tab:, …).
+fn label_kind(l: &str) -> String {
+    let (de, en) = match l.split(':').next().unwrap_or("") {
+        "fig" => ("Abbildung", "Figure"),
+        "tab" => ("Tabelle", "Table"),
+        "eq" => ("Gleichung", "Equation"),
+        "ch" | "cha" | "chap" => ("Kapitel", "Chapter"),
+        "sec" | "ssec" => ("Abschnitt", "Section"),
+        "lst" => ("Quellcode", "Listing"),
+        "app" | "appdx" => ("Anhang", "Appendix"),
+        _ => ("Marke", "Label"),
+    };
+    desc(de, en)
+}
+
+/// How often `\name` is used in the text (for ranking).
+fn usage(text: &str, name: &str) -> i32 {
+    text.matches(&format!("\\{name}")).count().min(30) as i32
+}
+
 
 fn fuzzy_score(hay: &str, needle: &str) -> Option<i32> {
     if needle.is_empty() {
@@ -623,20 +731,44 @@ fn compute_completion(text: &str, cursor: usize, src: &CompletionSources) -> Opt
                 CompKind::Ref,
                 src.labels
                     .iter()
-                    .filter_map(|l| fuzzy_score(l, prefix).map(|s| (s, CompItem { label: l.clone(), detail: String::new(), insert: l.clone() })))
+                    .filter_map(|l| fuzzy_score(l, prefix).map(|s| (s, CompItem { label: l.clone(), detail: label_kind(l), insert: l.clone() })))
                     .collect(),
             )
         } else if cmd == "begin" || cmd == "end" {
             (
                 CompKind::Env,
-                ENVIRONMENTS
-                    .iter()
-                    .filter_map(|e| {
-                        fuzzy_score(e, prefix).map(|s| {
-                            let insert = if cmd == "begin" { format!("{e}}}\n  $0\n\\end{{{e}}}") } else { format!("{e}}}") };
-                            (s, CompItem { label: e.to_string(), detail: tr!("Umgebung" | "Environment").into(), insert })
+                {
+                    // environments used in the file first, then the common ones
+                    let used = regex::Regex::new(r"\\begin\{([A-Za-z*]+)\}").unwrap();
+                    let mut envs: Vec<String> = used.captures_iter(text).map(|c| c[1].to_string()).collect();
+                    envs.extend(ENVIRONMENTS.iter().map(|e| e.to_string()));
+                    let mut seen = std::collections::HashSet::new();
+                    envs.retain(|e| seen.insert(e.clone()));
+                    let indent: String = before.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                    envs.into_iter()
+                        .filter_map(|e| {
+                            fuzzy_score(&e, prefix).map(|s| {
+                                let insert = if cmd == "begin" {
+                                    let (block, caret) = crate::smart::env_block(&e, &indent);
+                                    let mut b: Vec<char> = block.chars().collect();
+                                    b.splice(caret..caret, "$0".chars());
+                                    format!("{e}}}{}", b.into_iter().collect::<String>())
+                                } else {
+                                    format!("{e}}}")
+                                };
+                                let s = s + usage(text, &format!("begin{{{e}}}")) * 3;
+                                (s, CompItem { label: e.clone(), detail: tr!("Umgebung" | "Environment").into(), insert })
+                            })
                         })
-                    })
+                        .collect()
+                },
+            )
+        } else if cmd == "usepackage" || cmd == "RequirePackage" {
+            (
+                CompKind::Command,
+                PACKAGES
+                    .iter()
+                    .filter_map(|(p, de, en)| fuzzy_score(p, prefix).map(|s| (s, CompItem { label: p.to_string(), detail: desc(de, en), insert: format!("{p}}}") })))
                     .collect(),
             )
         } else if matches!(cmd, "input" | "include" | "includegraphics") {
@@ -661,16 +793,27 @@ fn compute_completion(text: &str, cursor: usize, src: &CompletionSources) -> Opt
         return Some(Completion { kind, start, items: items.into_iter().take(40).map(|x| x.1).collect(), selected: 0 });
     }
     // \comm  (command name)
-    let re_cmd = regex::Regex::new(r"\\([A-Za-z]{2,})$").unwrap();
+    let re_cmd = regex::Regex::new(r"\\([A-Za-z]+)$").unwrap();
     if let Some(c) = re_cmd.captures(before) {
         let m = c.get(1).unwrap();
         let prefix = m.as_str();
         let start = byte_to_char(text, line_start + m.start());
         let mut items: Vec<(i32, CompItem)> = COMMANDS
             .iter()
-            .filter(|(n, _)| n.starts_with(prefix) && *n != prefix)
-            .map(|(n, ins)| (100 - n.len() as i32, CompItem { label: format!("\\{n}"), detail: String::new(), insert: ins.to_string() }))
+            .filter(|(n, ..)| *n != prefix && (n.starts_with(prefix) || prefix.len() >= 3))
+            .filter_map(|(n, ins, de, en)| {
+                fuzzy_score(n, prefix).map(|s| (s + usage(text, n) * 4, CompItem { label: format!("\\{n}"), detail: desc(de, en), insert: ins.to_string() }))
+            })
             .collect();
+        // commands defined or used in the project that aren't in the list
+        let user = regex::Regex::new(r"\\([A-Za-z]{3,})").unwrap();
+        let mut extra: Vec<String> = user.captures_iter(text).map(|c| c[1].to_string()).filter(|n| n.starts_with(prefix) && n != prefix && !COMMANDS.iter().any(|(c, ..)| c == n)).collect();
+        extra.sort();
+        extra.dedup();
+        for n in extra.into_iter().take(8) {
+            let u = usage(text, &n);
+            items.push((40 + u * 4, CompItem { label: format!("\\{n}"), detail: tr!("im Dokument" | "in document").into(), insert: n }));
+        }
         if prefix == "beg" || prefix == "begi" || prefix == "begin" {
             items.insert(0, (200, CompItem { label: "\\begin{…}".into(), detail: tr!("Umgebung" | "Environment").into(), insert: "begin{$0".into() }));
         }
@@ -696,6 +839,10 @@ pub struct EditorStyle<'a> {
     pub git_marks: &'a [crate::git::LineMark],
     /// Active search query (find bar open) – matches get highlighted.
     pub search: Option<&'a str>,
+    /// Visual mode: citation key → "Author Year".
+    pub cite_labels: &'a HashMap<String, String>,
+    /// Visual mode: line → heading number ("2.1") for this file.
+    pub heading_numbers: &'a HashMap<usize, String>,
 }
 
 pub struct EditorOutput {
@@ -784,6 +931,49 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
         buf.vim_block = buf.vim_block.map(|b| b.or(Some(buf.cursor)));
     }
 
+    // ── smart typing: bracket pairs, automatic \end{…}, list continuation, indentation ──
+    if has_focus && !vim_normal && buf.completion.is_none() {
+        let evs = ctx.input_mut(|i| std::mem::take(&mut i.events));
+        let mut keep = Vec::with_capacity(evs.len());
+        let mut earlier_edit = false; // only transform when nothing else edits before us
+        for e in evs {
+            let sel = (buf.sel_end, buf.cursor);
+            let collapsed = sel.0 == sel.1;
+            let handled = if earlier_edit {
+                None
+            } else {
+                match &e {
+                    egui::Event::Text(t) if t.chars().count() == 1 => crate::smart::on_char(&buf.text, sel, t.chars().next().unwrap()),
+                    egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.is_none() && collapsed => {
+                        Some(crate::smart::on_enter(&buf.text, buf.cursor))
+                    }
+                    egui::Event::Key { key: Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none() && collapsed => {
+                        crate::smart::on_backspace(&buf.text, buf.cursor)
+                    }
+                    _ => None,
+                }
+            };
+            match handled {
+                Some(ed) => {
+                    if ed.text != buf.text {
+                        buf.text = ed.text;
+                        out.changed = true;
+                    }
+                    buf.cursor = ed.cursor;
+                    buf.sel_end = ed.cursor;
+                    buf.place_cursor(ed.cursor, ed.cursor);
+                }
+                None => {
+                    if matches!(e, egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Key { pressed: true, .. }) {
+                        earlier_edit = true;
+                    }
+                    keep.push(e);
+                }
+            }
+        }
+        ctx.input_mut(|i| i.events = keep);
+    }
+
     // ── key handling before the TextEdit sees the events ──
     let mut accept: Option<CompItem> = None;
     if has_focus && !vim_normal {
@@ -868,7 +1058,7 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
         state.store(&ctx, buf.id);
         buf.cursor = b;
         buf.sel_end = a;
-        scroll_to_cursor = true;
+        scroll_to_cursor = buf.pending_scroll;
     }
     // Focus is requested only once no mouse button is pressed: a click elsewhere (file tree,
     // quick open, tabs) would otherwise take the focus away again in the same frame.
@@ -893,7 +1083,8 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
             .show(ui, |ui| {
                 if st.visual {
                     let avail_w = ui.available_width();
-                    let col = (avail_w - 64.0).clamp(240.0, 780.0);
+                    // leave a margin on the left for heading numbers
+                    let col = (avail_w - 140.0).clamp(240.0, 780.0);
                     let pad = ((avail_w - col) / 2.0).max(0.0);
                     let clip = ui.clip_rect();
                     // paper
@@ -1045,7 +1236,11 @@ fn editor_core(
     let syn = st.syntax;
     let size = st.font_size;
     let rev = st.style_rev;
-    let vtheme = crate::visual::VisualTheme::new(pal, vsize);
+    let mut vtheme = crate::visual::VisualTheme::new(pal, vsize);
+    if visual {
+        vtheme.cites = st.cite_labels.clone();
+    }
+    let cites_key = st.cite_labels.len() as u64 ^ st.cite_labels.values().map(|v| v.len() as u64).sum::<u64>().rotate_left(11);
     let id = buf.id;
     let Buffer { text, hl_cache, vis_cache, .. } = buf;
     let mut layouter = |ui: &egui::Ui, tb: &dyn egui::TextBuffer, wrap: f32| {
@@ -1056,7 +1251,7 @@ fn editor_core(
                 let (sp, de) = crate::visual::spans(s);
                 *vis_cache = Some((th, sp, de));
             }
-            let key = th ^ rev.rotate_left(7) ^ (vsize.to_bits() as u64).rotate_left(3) ^ raw.map_or(1, |(a, b)| (a as u64) << 20 ^ b as u64) ^ 0x5151;
+            let key = th ^ rev.rotate_left(7) ^ (vsize.to_bits() as u64).rotate_left(3) ^ raw.map_or(1, |(a, b)| (a as u64) << 20 ^ b as u64) ^ 0x5151 ^ cites_key.rotate_left(29);
             match hl_cache {
                 Some((k, j)) if *k == key => j.clone(),
                 _ => {
@@ -1215,11 +1410,77 @@ fn editor_core(
             let h = vsize * 1.05;
             let cy = r0.center().y - vsize * 0.02;
             let col = if sp.st == crate::visual::Vs::Cite { pal.accent } else { pal.cyan };
-            let rect = Rect::from_min_max(pos2(r0.min.x - 4.0, cy - h / 2.0), pos2(r1.min.x + 4.0, cy + h / 2.0));
-            chips.push(Shape::rect_filled(rect, 5.0, with_alpha(col, 30)));
+            let label = if sp.st == crate::visual::Vs::Cite { crate::visual::cite_label(&buf.text[sp.s..sp.e], &vtheme) } else { None };
+            if let Some(label) = label {
+                // keys are hidden; the reserved space in front of them holds "Author Year"
+                let w = crate::visual::cite_width(&label, &vtheme);
+                let rect = Rect::from_min_max(pos2(r0.min.x - w + 1.0, cy - h / 2.0), pos2(r0.min.x - 2.0, cy + h / 2.0));
+                chips.push(Shape::rect_filled(rect, 5.0, with_alpha(col, 34)));
+                let mut font = crate::visual::cite_font(&vtheme);
+                let tc = mix(col, pal.bright, 0.35);
+                let mut g = ui.painter().layout_no_wrap(label.clone(), font.clone(), tc);
+                if g.size().x > rect.width() - 8.0 {
+                    // estimated width was too small: shrink the text to fit the chip
+                    font.size *= ((rect.width() - 8.0) / g.size().x).max(0.6);
+                    g = ui.painter().layout_no_wrap(label, font, tc);
+                }
+                let gx = rect.min.x + (rect.width() - g.size().x) / 2.0;
+                chips.push(Shape::galley(pos2(gx, rect.center().y - g.size().y / 2.0), g, pal.text));
+            } else {
+                let rect = Rect::from_min_max(pos2(r0.min.x - 4.0, cy - h / 2.0), pos2(r1.min.x + 4.0, cy + h / 2.0));
+                chips.push(Shape::rect_filled(rect, 5.0, with_alpha(col, 30)));
+            }
+        }
+        // typographic glyphs (°, …, –, “ ”) painted into the space reserved before hidden markup
+        let (mut lb, mut lc) = (0usize, 0usize);
+        for sp in spans.iter() {
+            let crate::visual::Vs::Glyph(gl, ctxs) = sp.st else { continue };
+            if sp.e > buf.text.len() || raw.is_some_and(|(a, b)| sp.s < b.max(a + 1) && sp.e > a) {
+                continue;
+            }
+            lc += buf.text[lb..sp.s].chars().count();
+            lb = sp.s;
+            let r0 = galley.pos_from_cursor(CCursor::new(lc)).translate(gpos.to_vec2());
+            if r0.max.y < clip.min.y || r0.min.y > clip.max.y {
+                continue;
+            }
+            let base = crate::visual::glyph_format(*ctxs, &vtheme);
+            let w = crate::visual::glyph_em(gl) * base.font_id.size;
+            let g = ui.painter().layout_no_wrap(gl.to_string(), base.font_id.clone(), base.color);
+            // align the glyph's baseline with the baseline of the normal text in that row
+            let row = galley.rows.iter().find(|row| {
+                let y = gpos.y + row.pos.y;
+                y <= r0.center().y && r0.center().y <= y + row.size.y.max(1.0)
+            });
+            let baseline = row.and_then(|row| {
+                row.glyphs.iter().max_by(|a, b| a.font_height.total_cmp(&b.font_height)).map(|gl| gpos.y + row.pos.y + gl.pos.y)
+            });
+            let own = g.rows.first().and_then(|r| r.glyphs.first()).map(|gl| gl.pos.y).unwrap_or(g.size().y * 0.8);
+            let top = baseline.map(|b| b - own).unwrap_or(r0.center().y - g.size().y / 2.0);
+            chips.push(Shape::galley(pos2(r0.min.x - w + (w - g.size().x) / 2.0, top), g, base.color));
         }
         painter.set(chip_idx, Shape::Vec(chips));
         let _ = &spans;
+        // heading numbers in the left margin
+        if !st.heading_numbers.is_empty() {
+            let mut line = 1usize;
+            let mut new_par = true;
+            for row in &galley.rows {
+                let y0 = gpos.y + row.pos.y;
+                if new_par && row.size.y > 4.0 && y0 <= clip.max.y && y0 + row.size.y >= clip.min.y {
+                    if let Some(num) = st.heading_numbers.get(&line) {
+                        if raw.is_none_or(|(a, _)| buf.text[..a.min(buf.text.len())].matches('\n').count() + 1 != line) {
+                            let f = FontId::new((row.size.y * 0.42).clamp(11.0, 22.0), FontFamily::Name("serif".into()));
+                            painter.text(pos2(resp_rect.min.x - 16.0, y0 + row.size.y * 0.5), egui::Align2::RIGHT_CENTER, num, f, with_alpha(pal.accent, 150));
+                        }
+                    }
+                }
+                new_par = row.ends_with_newline;
+                if row.ends_with_newline {
+                    line += 1;
+                }
+            }
+        }
         // bullets / numbers for hidden \item
         let (mut lb, mut lc) = (0usize, 0usize);
         for d in decor {
@@ -1414,6 +1675,10 @@ fn apply_completion(buf: &mut Buffer, comp: &Completion, item: &CompItem) {
         ins.push('}');
         caret = ins.chars().count();
     }
+    // an auto-paired `}` already follows: don't insert a second one
+    if matches!(comp.kind, CompKind::Env) && ins.contains('}') && chars.get(end) == Some(&'}') {
+        end += 1;
+    }
     buf.replace_chars(comp.start, end, &ins);
     buf.select(comp.start + caret, comp.start + caret);
 }
@@ -1443,4 +1708,35 @@ pub fn find_matches(text: &str, q: &str) -> Vec<(usize, usize)> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+
+    fn comp(text: &str) -> Option<Completion> {
+        let cites = vec![CompItem { label: "knuth1984".into(), detail: "Knuth 1984".into(), insert: "knuth1984".into() }];
+        let labels = vec!["fig:esters".to_string(), "tab:recipe".to_string()];
+        let files = vec![];
+        let src = CompletionSources { cites: &cites, labels: &labels, files: &files };
+        compute_completion(text, text.chars().count(), &src)
+    }
+
+    #[test]
+    fn completes() {
+        let c = comp("\\sec").unwrap();
+        assert_eq!(c.items[0].label, "\\section");
+        assert!(comp("\\s").unwrap().items.iter().all(|i| i.label.starts_with("\\s")));
+        let c = comp("\\begin{item").unwrap();
+        assert_eq!(c.items[0].label, "itemize");
+        assert!(c.items[0].insert.contains("\\item $0") && c.items[0].insert.ends_with("\\end{itemize}"));
+        let c = comp("\\usepackage{book").unwrap();
+        assert_eq!(c.items[0].label, "booktabs");
+        let c = comp("see \\cref{fig").unwrap();
+        assert_eq!(c.items[0].label, "fig:esters");
+        assert!(!c.items[0].detail.is_empty());
+        // commands used in the document are offered too
+        let c = comp("\\mymacro{x} and \\mym").unwrap();
+        assert!(c.items.iter().any(|i| i.label == "\\mymacro"));
+    }
 }

@@ -137,38 +137,55 @@ impl App {
     }
 
     /// Detect two short Shift taps (no other key in between) and Ctrl+P.
+    ///
+    /// A quick tap often arrives as press *and* release within one frame, so the modifier
+    /// events are replayed in order instead of looking only at the final state.
     pub fn quick_shortcut(&mut self, ctx: &egui::Context, now: f64) {
-        let (down, other, ctrl_p) = ctx.input_mut(|i| {
-            let other = i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Paste(_)));
-            (i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command, other, i.consume_key(Modifiers::COMMAND, Key::P))
-        });
+        let ctrl_p = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P));
         if ctrl_p {
             self.open_quick(now);
             return;
         }
+        let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
+        let mut open = false;
         let st = &mut self.shift_tap;
-        if other {
-            st.last_tap = -10.0;
-            st.down_since = -10.0;
-        }
-        if down && !st.prev_down {
-            st.down_since = now;
-        }
-        if !down && st.prev_down && !other {
-            // a tap = short press
-            if now - st.down_since < 0.35 {
-                if now - st.last_tap < 0.45 {
-                    st.last_tap = -10.0;
-                    st.prev_down = down;
-                    if self.quick.is_none() {
-                        self.open_quick(now);
+        for e in events {
+            match e {
+                egui::Event::ModifiersChanged(m) => {
+                    let only_shift = m.shift && !m.ctrl && !m.alt && !m.command && !m.mac_cmd;
+                    if only_shift && !st.prev_down {
+                        st.down_since = now;
                     }
-                    return;
+                    if !m.shift && st.prev_down && st.down_since >= 0.0 {
+                        // released: a short press counts as a tap
+                        if now - st.down_since < 0.4 {
+                            if now - st.last_tap < 0.5 {
+                                st.last_tap = -10.0;
+                                open = true;
+                            } else {
+                                st.last_tap = now;
+                            }
+                        } else {
+                            st.last_tap = -10.0;
+                        }
+                    }
+                    if !only_shift && m.any() && m.shift {
+                        // Shift held together with another modifier: not a tap
+                        st.down_since = -10.0;
+                    }
+                    st.prev_down = m.shift;
                 }
-                st.last_tap = now;
+                // any real key, text or click between the taps cancels the gesture
+                egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. } | egui::Event::Paste(_) => {
+                    st.last_tap = -10.0;
+                    st.down_since = -10.0;
+                }
+                _ => {}
             }
         }
-        st.prev_down = down;
+        if open && self.quick.is_none() {
+            self.open_quick(now);
+        }
     }
 
     fn quick_items(&self, q: &str) -> Vec<Item> {

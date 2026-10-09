@@ -36,11 +36,13 @@ pub struct Settings {
     pub show_pdf: bool,
     /// Git diff: side by side instead of inline.
     pub diff_split: bool,
+    /// Presentation: visual slide editor instead of LaTeX code.
+    pub slides_visual: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false }
     }
 }
 
@@ -196,6 +198,9 @@ pub struct App {
     pub slide_outline: Vec<OutlineItem>,
     pub labels: Vec<String>,
     pub cites: Vec<CompItem>,
+    /// citation key → "Author Year" (visual mode chips)
+    pub cite_labels: std::collections::HashMap<String, String>,
+    heading_nums: std::collections::HashMap<String, std::collections::HashMap<usize, String>>,
     cites_rev: u64,
     pub word_count: usize,
     wc_hash: u64,
@@ -229,6 +234,9 @@ pub struct App {
     pub vim: crate::vim::VimState,
     pub about_open: bool,
     pub help_open: bool,
+    pub settings_open: bool,
+    pub settings_page: crate::settings_ui::Page,
+    pub slide_ed: crate::slide_ui::SlideEditor,
     pub quick: Option<crate::quickopen::QuickOpen>,
     pub shift_tap: crate::quickopen::ShiftTap,
     /// Most recently opened files (newest first).
@@ -272,6 +280,8 @@ impl App {
             slide_outline: vec![],
             labels: vec![],
             cites: vec![],
+            cite_labels: Default::default(),
+            heading_nums: Default::default(),
             cites_rev: 0,
             word_count: 0,
             wc_hash: 0,
@@ -305,6 +315,9 @@ impl App {
             vim: Default::default(),
             about_open: false,
             help_open: false,
+            settings_open: false,
+            settings_page: Default::default(),
+            slide_ed: Default::default(),
             quick: None,
             shift_tap: Default::default(),
             recent: vec![],
@@ -508,6 +521,67 @@ impl App {
         }
         self.git.refresh(&root, now);
         self.refresh_tree();
+    }
+
+    /// Heading numbers ("2", "2.1", appendix "A.1") for the lines of `rel`, from the outline.
+    pub fn heading_numbers(&self, rel: &str) -> std::collections::HashMap<usize, String> {
+        self.heading_nums.get(rel).cloned().unwrap_or_default()
+    }
+
+    /// Computed once per outline rebuild (see `rebuild_indexes`).
+    fn compute_heading_numbers(&self) -> std::collections::HashMap<String, std::collections::HashMap<usize, String>> {
+        let mut out: std::collections::HashMap<String, std::collections::HashMap<usize, String>> = std::collections::HashMap::new();
+        let main = self.read_source(&self.project.config.thesis_main).unwrap_or_default();
+        let appendix_at = main.find("\\appendix");
+        let in_appendix = |file: &str| {
+            let stem = file.trim_end_matches(".tex");
+            match (appendix_at, main.find(&format!("{{{stem}}}"))) {
+                (Some(a), Some(p)) => p > a,
+                _ => false,
+            }
+        };
+        let (mut ch, mut sec, mut sub) = (0usize, 0usize, 0usize);
+        let mut app_ch = 0usize;
+        let mut cache: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for it in &self.outline {
+            let lines = cache.entry(it.file.clone()).or_insert_with(|| self.read_source(&it.file).unwrap_or_default().lines().map(String::from).collect());
+            let starred = lines.get(it.line.saturating_sub(1)).is_some_and(|l| {
+                let l = crate::project::strip_comment(l);
+                regex::Regex::new(r"\\(chapter|section|subsection|subsubsection|addchap|addsec)\*").unwrap().is_match(l)
+            });
+            if starred {
+                continue;
+            }
+            let appx = in_appendix(&it.file);
+            let num = match it.level {
+                0 => continue,
+                1 => {
+                    sec = 0;
+                    sub = 0;
+                    if appx {
+                        app_ch += 1;
+                        ((b'A' + ((app_ch - 1) % 26) as u8) as char).to_string()
+                    } else {
+                        ch += 1;
+                        ch.to_string()
+                    }
+                }
+                2 => {
+                    sec += 1;
+                    sub = 0;
+                    let c = if appx { ((b'A' + (app_ch.max(1) - 1) as u8) as char).to_string() } else { ch.to_string() };
+                    format!("{c}.{sec}")
+                }
+                3 => {
+                    sub += 1;
+                    let c = if appx { ((b'A' + (app_ch.max(1) - 1) as u8) as char).to_string() } else { ch.to_string() };
+                    format!("{c}.{sec}.{sub}")
+                }
+                _ => continue,
+            };
+            out.entry(it.file.clone()).or_default().insert(it.line, num);
+        }
+        out
     }
 
     /// Git status letter for display; open files with unsaved edits show "M" right away.
@@ -723,6 +797,7 @@ impl App {
         let slides = self.project.config.slides_main.clone();
         self.outline = project::outline(&main, &|f| self.read_source(f));
         self.slide_outline = project::outline(&slides, &|f| self.read_source(f));
+        self.heading_nums = self.compute_heading_numbers();
         let texts: Vec<String> = self.flat.iter().filter(|f| f.ends_with(".tex")).filter_map(|f| self.read_source(f)).collect();
         self.labels = project::scan_labels(&texts);
         if self.cites_rev != self.shelf.revision {
@@ -737,6 +812,7 @@ impl App {
                 })
                 .collect();
             self.cites_rev = self.shelf.revision;
+            self.cite_labels = self.shelf.papers.iter().map(|p| (p.entry.key.clone(), format!("{} {}", p.entry.authors_short(), p.entry.year()).trim().to_string())).collect();
         }
     }
 
@@ -1068,6 +1144,45 @@ impl eframe::App for App {
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
                 if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
+                    if name.contains("sltype") && self.debug_typed < 6020 {
+                        // visual slide editor: focus first list item of slide 3, Enter, type
+                        if self.debug_typed < 6000 {
+                            self.debug_typed = 6000;
+                        }
+                        let k = self.debug_typed - 6000;
+                        match k {
+                            0 => self.slide_ed.debug_focus = Some(crate::slide_ui::field_id(2, &[0], 1000)),
+                            4 => raw.events.push(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }),
+                            6 => {
+                                for c in "New point with 50%".chars() {
+                                    raw.events.push(egui::Event::Text(c.to_string()));
+                                }
+                            }
+                            19 => {
+                                let rel = self.project.config.slides_main.clone();
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let t = &self.buffers[i].text;
+                                    let a = t.find("Why Beer?").unwrap_or(0);
+                                    eprintln!("SLTYPE\n{}", &t[a..(a + 420).min(t.len())]);
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("dshift") && self.debug_typed < 5002 {
+                        // two quick Shift taps, each press+release within a single frame
+                        if self.debug_typed < 5000 {
+                            self.debug_typed = 5000;
+                        }
+                        let shift = egui::Modifiers { shift: true, ..Default::default() };
+                        raw.events.push(egui::Event::ModifiersChanged(shift));
+                        raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+                        self.debug_typed += 1;
+                        if self.debug_typed == 5002 {
+                            eprintln!("DSHIFT sent");
+                        }
+                    }
                     if name.contains("tabdrag") {
                         // drag the first tab to the far right over ~14 frames (raw input, so egui sees real pointer events)
                         let rects: Vec<(String, egui::Rect)> = ctx.data(|d| d.get_temp(egui::Id::new("dbg-tabrects"))).unwrap_or_default();
@@ -1146,6 +1261,7 @@ impl eframe::App for App {
             self.dialogs(&ctx, &pal, now);
             self.about_window(&ctx, &pal);
             self.help_window(&ctx, &pal);
+            self.settings_window(&ctx, &pal);
             self.quick_ui(&ctx, now);
             self.draw_toasts(&ctx, &pal, now);
             return;
@@ -1166,6 +1282,7 @@ impl eframe::App for App {
         self.dialogs(&ctx, &pal, now);
         self.about_window(&ctx, &pal);
         self.help_window(&ctx, &pal);
+        self.settings_window(&ctx, &pal);
         self.quick_ui(&ctx, now);
         self.draw_toasts(&ctx, &pal, now);
     }
@@ -1248,133 +1365,12 @@ impl App {
                     // right side
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // settings
-                        let resp = widgets::icon_button(ui, ic::COG, tr!("Einstellungen" | "Settings"), pal, false);
-                        egui::Popup::menu(&resp).show(|ui| {
-                            ui.set_min_width(260.0);
-                            widgets::section_label(ui, tr!("Sprache" | "Language"), pal);
-                            ui.horizontal(|ui| {
-                                let mut ch = false;
-                                ch |= ui.selectable_value(&mut self.settings.lang_en, false, "Deutsch").changed();
-                                ch |= ui.selectable_value(&mut self.settings.lang_en, true, "English").changed();
-                                if ch {
-                                    crate::i18n::set_english(self.settings.lang_en);
-                                    self.settings.save();
-                                }
-                            });
-                            widgets::section_label(ui, "Editor", pal);
-                            ui.horizontal(|ui| {
-                                ui.label(tr!("Eingabe" | "Input"));
-                                let mut ch = false;
-                                ch |= ui.selectable_value(&mut self.settings.input_vim, false, "Standard").changed();
-                                ch |= ui.selectable_value(&mut self.settings.input_vim, true, format!("{}  Vim", ic::TERMINAL)).changed();
-                                if ch {
-                                    self.settings.save();
-                                    self.vim = Default::default();
-                                }
-                            });
-                            if self.settings.input_vim {
-                                ui.label(egui::RichText::new(tr!("Vim gilt im Code-Modus; im visuellen Modus bleibt die Standardeingabe." | "Vim applies in code mode; visual mode keeps the standard input.")).font(widgets::ui_font(11.0)).color(pal.dim));
-                            }
-                            ui.horizontal(|ui| {
-                                ui.label(tr!("Schriftgröße" | "Font size"));
-                                if widgets::fancy_slider(ui, &mut self.settings.font_size, 10.0, 24.0, 0.5, "pt", pal).changed() {
-                                    self.settings.save();
-                                }
-                            });
-                            if ui.checkbox(&mut self.settings.auto_compile, tr!("Automatisch kompilieren" | "Compile automatically")).changed() {
-                                self.settings.save();
-                            }
-                            if ui.checkbox(&mut self.settings.dark_pdf, tr!("PDF im Dark-Mode abdunkeln" | "Dim PDF in dark mode")).changed() {
-                                self.settings.save();
-                                self.thesis.viewer.dark_pages = self.settings.dark_pdf && pal.dark;
-                            }
-                            widgets::section_label(ui, "Compiler", pal);
-                            let mut changed = false;
-                            ui.horizontal(|ui| {
-                                ui.label(tr!("Arbeit" | "Thesis"));
-                                for e in ["pdflatex", "xelatex", "lualatex"] {
-                                    changed |= ui.selectable_value(&mut self.project.config.engine, e.to_string(), e).changed();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(tr!("Folien" | "Slides"));
-                                for e in ["pdflatex", "xelatex", "lualatex"] {
-                                    changed |= ui.selectable_value(&mut self.project.config.slides_engine, e.to_string(), e).changed();
-                                }
-                            });
-                            if ui.button(format!("{}  {}", ic::BOOKMARK, tr!("Hilfe & Tastenkürzel …   F1" | "Help & shortcuts …   F1"))).clicked() {
-                                self.help_open = true;
-                                ui.close();
-                            }
-                            if ui.button(trf!("{}  Über nEdit …" | "{}  About nEdit …", ic::GRADUATION)).clicked() {
-                                self.about_open = true;
-                                ui.close();
-                            }
-                            widgets::section_label(ui, "Updates", pal);
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(format!("Version {}", crate::updater::VERSION)).color(pal.subtext));
-                                if ui.add_enabled(!self.updater.checking, egui::Button::new(trf!("{}  Nach Updates suchen" | "{}  Check for updates", ic::REFRESH))).clicked() {
-                                    self.updater.check(true, &ctx);
-                                }
-                            });
-                            if ui.checkbox(&mut self.settings.update_check, tr!("Beim Start nach Updates suchen" | "Check for updates on start")).changed() {
-                                self.settings.save();
-                            }
-                            if !self.updater.status.is_empty() {
-                                ui.label(egui::RichText::new(&self.updater.status).font(widgets::ui_font(11.5)).color(pal.dim));
-                            }
-                            if self.updater.available.is_some() && ui.button(trf!("{}  Update anzeigen" | "{}  Show update", ic::DOWNLOAD)).clicked() {
-                                self.dialog = Some(Dialog::Update);
-                            }
-                            widgets::section_label(ui, tr!("Präsentation" | "Presentation"), pal);
-                            ui.horizontal(|ui| {
-                                ui.label(tr!("Redezeit" | "Talk length"));
-                                changed |= ui.add(egui::DragValue::new(&mut self.project.config.talk_minutes).range(1..=120).suffix(" min")).changed();
-                            });
-                            if changed {
-                                let _ = self.project.save_config();
-                            }
-                        });
-                        // theme picker
-                        let resp = widgets::icon_button(ui, ic::BRUSH, "Theme", pal, false);
-                        egui::Popup::menu(&resp).show(|ui| {
-                            ui.set_min_width(250.0);
-                            widgets::section_label(ui, "Theme", pal);
-                            let follow = self.settings.theme.is_none();
-                            let omarchy = theme::omarchy_installed();
-                            if omarchy {
-                                let cur = theme::current_omarchy_name().map(|n| theme::pretty_name(&n)).unwrap_or_default();
-                                if ui.selectable_label(follow, trf!("{}  Omarchy folgen  ·  {cur}" | "{}  Follow Omarchy  ·  {cur}", ic::MAGIC)).clicked() {
-                                    self.set_theme(None, &ctx);
-                                }
-                            }
-                            // without Omarchy, "no theme chosen" means nEdit Ink
-                            let ink = self.settings.theme.as_deref() == Some("nedit") || (follow && !omarchy);
-                            if ui.selectable_label(ink, format!("{}  nEdit Ink", ic::MOON)).clicked() {
-                                self.set_theme(Some("nedit".into()), &ctx);
-                            }
-                            ui.separator();
-                            egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
-                                for name in theme::all_theme_names() {
-                                    let sel = self.settings.theme.as_deref() == Some(name.as_str());
-                                    let p = theme::load_named(&name);
-                                    ui.horizontal(|ui| {
-                                        if let Some(p) = &p {
-                                            let (r, _) = ui.allocate_exact_size(vec2(44.0, 16.0), egui::Sense::hover());
-                                            let cols = [p.base, p.accent, p.green, p.magenta];
-                                            for (k, c) in cols.iter().enumerate() {
-                                                let rr = Rect::from_min_size(pos2(r.min.x + k as f32 * 11.0, r.min.y), vec2(11.0, 16.0));
-                                                ui.painter().rect_filled(rr, 2.0, *c);
-                                            }
-                                            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, pal.border), egui::StrokeKind::Outside);
-                                        }
-                                        if ui.selectable_label(sel, theme::pretty_name(&name)).clicked() {
-                                            self.set_theme(Some(name.clone()), &ctx);
-                                        }
-                                    });
-                                }
-                            });
-                        });
+                        if widgets::icon_button(ui, ic::COG, tr!("Einstellungen" | "Settings"), pal, self.settings_open && self.settings_page != crate::settings_ui::Page::Appearance).clicked() {
+                            self.open_settings(None, &ctx);
+                        }
+                        if widgets::icon_button(ui, ic::BRUSH, tr!("Theme & Darstellung" | "Theme & appearance"), pal, self.settings_open && self.settings_page == crate::settings_ui::Page::Appearance).clicked() {
+                            self.open_settings(Some(crate::settings_ui::Page::Appearance), &ctx);
+                        }
                         if self.updater.installed {
                             if widgets::button(ui, ic::REFRESH, tr!("Neu starten" | "Restart"), pal, BtnKind::Primary).on_hover_text(tr!("Update installiert – nEdit neu starten" | "Update installed – restart nEdit")).clicked() {
                                 self.save_all();
@@ -1942,6 +1938,13 @@ impl App {
                 eprintln!("REVTEST after: dirty={} has_unsaved={} has_saved={} equals_head={}", b.dirty(), b.text.contains("UNGESPEICHERTE"), b.text.contains("GESPEICHERTE ÄNDERUNG"), b.text == disk);
             }
         }
+        if name.contains("dshift") && (5002..5004).contains(&self.debug_typed) {
+            // check one frame later (detection runs after this hook in the same frame)
+            if self.debug_typed == 5003 {
+                eprintln!("DSHIFT quick open = {}", self.quick.is_some());
+            }
+            self.debug_typed += 1;
+        }
         if let Some(q) = name.split("quick=").nth(1) {
             if self.quick.is_none() {
                 self.open_quick(now - 1.0);
@@ -1965,6 +1968,27 @@ impl App {
         if name.contains("ctrltab") && self.debug_typed != 3000 + self.shot_step {
             self.debug_typed = 3000 + self.shot_step;
             ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }));
+        }
+        if let Some(n) = name.split("slide=").nth(1).and_then(|s| s.split(['-', '@']).next()).and_then(|s| s.parse::<usize>().ok()) {
+            let rel = self.project.config.slides_main.clone();
+            if let Some(i) = self.buffer_idx(&rel) {
+                let b = &mut self.buffers[i];
+                if let Some((p, _)) = b.text.match_indices("\\begin{frame}").nth(n.saturating_sub(1)) {
+                    let c = b.text[..p].chars().count();
+                    b.cursor = c;
+                    b.sel_end = c;
+                }
+            }
+        }
+        if name.contains("svis") {
+            self.settings.slides_visual = true;
+        }
+        if name.contains("settings") {
+            let page = if name.contains("set-ed") { crate::settings_ui::Page::Editor } else if name.contains("set-gen") { crate::settings_ui::Page::General } else if name.contains("set-proj") { crate::settings_ui::Page::Project } else { crate::settings_ui::Page::Appearance };
+            if !self.settings_open {
+                self.open_settings(Some(page), ctx);
+            }
+            self.settings_page = page;
         }
         if name.contains("help") {
             self.help_open = true;

@@ -53,6 +53,9 @@ fn sections() -> Vec<Section> {
                 ("Ctrl+Click", tr!("Stelle im PDF zeigen" | "Show position in the PDF")),
                 (tr!("Doppelklick im PDF" | "Double-click in PDF"), tr!("Zur Quelltextstelle springen" | "Jump to the source")),
                 ("\\cite{  \\cref{  \\begin{", tr!("Autovervollständigung" | "Autocompletion")),
+                ("\\begin{…} ↵", tr!("Passendes \\end{…} wird automatisch ergänzt" | "Matching \\end{…} is added automatically")),
+                ("{  [", tr!("Klammern werden paarweise gesetzt, Auswahl wird umschlossen" | "Brackets are paired, a selection gets wrapped")),
+                ("\\item … ↵", tr!("Nächster Listenpunkt (leerer Punkt + ↵ beendet die Liste)" | "Next list item (empty item + ↵ ends the list)")),
             ],
         },
         Section {
@@ -80,6 +83,8 @@ fn sections() -> Vec<Section> {
             title: tr!("Präsentation" | "Presentation"),
             rows: vec![
                 ("F5", tr!("Präsentieren (Vollbild mit Timer)" | "Present (full screen with timer)")),
+                (tr!("Visuell" | "Visual"), tr!("Folien direkt bearbeiten wie in PowerPoint – sauberes LaTeX entsteht automatisch" | "Edit slides directly like in PowerPoint – clean LaTeX is generated")),
+                ("↵  Tab  ⇧Tab", tr!("Visuell: neuer Punkt, einrücken, ausrücken" | "Visual: new item, indent, outdent")),
                 ("← →  Space", tr!("Folie zurück / weiter" | "Previous / next slide")),
                 ("B  P  T  Esc", tr!("Schwarz, Pause, Leiste fixieren, beenden" | "Black, pause, pin bar, exit")),
             ],

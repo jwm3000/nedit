@@ -27,6 +27,48 @@ pub enum Vs {
     ItemGap(u8),
     /// Markup that is hidden unless on the cursor line; carries the surrounding style.
     Markup(&'static Vs),
+    /// Hidden markup that is shown as a typographic glyph (°, …, –, “ …) – painted by the editor.
+    Glyph(&'static str, &'static Vs),
+}
+
+/// Typographic replacements for symbol commands.
+pub fn symbol_glyph(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "textdegree" | "degree" => "°",
+        "ldots" | "dots" | "textellipsis" => "…",
+        "textendash" => "–",
+        "textemdash" => "—",
+        "euro" | "EUR" => "€",
+        "S" => "§",
+        "P" => "¶",
+        "copyright" | "textcopyright" => "©",
+        "textregistered" => "®",
+        "texttrademark" => "™",
+        "textbackslash" => "\\",
+        "textasciitilde" => "~",
+        "textbullet" => "•",
+        "textquotedblleft" => "“",
+        "textquotedblright" => "”",
+        "glqq" => "„",
+        "grqq" => "“",
+        "times" => "×",
+        _ => return None,
+    })
+}
+
+/// Approximate advance width of a glyph in em (serif body font).
+pub fn glyph_em(g: &str) -> f32 {
+    match g {
+        "…" => 0.92,
+        "—" => 0.95,
+        "–" | "€" | "×" => 0.52,
+        "©" | "®" => 0.75,
+        "™" => 0.9,
+        "°" | "§" | "¶" => 0.42,
+        "“" | "”" | "„" => 0.42,
+        "•" => 0.4,
+        _ => 0.5,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +133,10 @@ fn markup(v: Vs) -> Vs {
     Vs::Markup(ctx_ref(v))
 }
 
+fn glyph(g: &'static str, v: Vs) -> Vs {
+    Vs::Glyph(g, ctx_ref(v))
+}
+
 const HIDE_ENVS: &[&str] = &["itemize", "enumerate", "description", "document", "center", "flushleft", "flushright", "raggedright", "abstract", "quote", "quotation", "minipage", "small", "footnotesize"];
 const MATH_ENVS: &[&str] = &["equation", "equation*", "align", "align*", "gather", "gather*", "multline", "multline*", "flalign", "flalign*", "displaymath", "eqnarray", "eqnarray*"];
 
@@ -105,7 +151,7 @@ impl Out {
             return;
         }
         if let Some(l) = self.spans.last_mut() {
-            if l.st == st && l.e == s {
+            if l.st == st && l.e == s && !matches!(st, Vs::Glyph(..)) {
                 l.e = e;
                 return;
             }
@@ -200,12 +246,24 @@ fn inline(text: &str, s: usize, e: usize, base: Vs, o: &mut Out) {
                         "caption" => Some(Vs::Caption),
                         _ => None,
                     };
+                    // symbol commands: \textdegree → °, \ldots → … (an empty {} is swallowed)
+                    if let Some(g) = symbol_glyph(name) {
+                        let mut end = after;
+                        if end + 1 < e && b[end] == b'{' && b[end + 1] == b'}' {
+                            end += 2;
+                        }
+                        o.push(i, end, glyph(g, base));
+                        i = end;
+                        run = i;
+                        continue;
+                    }
                     let is_cite = name.contains("cite");
                     let is_ref = matches!(name, "ref" | "cref" | "Cref" | "eqref" | "autoref" | "pageref" | "vref" | "nameref" | "Autoref");
                     let open = skip_opt(b, after, e);
                     if (style_cmd.is_some() || is_cite || is_ref || name == "label") && open < e && b[open] == b'{' {
                         let close = matching_brace(b, open, e).unwrap_or(e);
-                        o.push(i, open + 1, markup(base));
+                        let quotes = name == "enquote";
+                        o.push(i, open + 1, if quotes { glyph("“", base) } else { markup(base) });
                         if name == "label" {
                             o.push(open + 1, close, markup(base));
                         } else if is_cite {
@@ -217,7 +275,7 @@ fn inline(text: &str, s: usize, e: usize, base: Vs, o: &mut Out) {
                             inline(text, open + 1, close, st, o);
                         }
                         if close < e {
-                            o.push(close, close + 1, markup(base));
+                            o.push(close, close + 1, if quotes { glyph("”", base) } else { markup(base) });
                             i = close + 1;
                         } else {
                             i = e;
@@ -310,6 +368,21 @@ fn inline(text: &str, s: usize, e: usize, base: Vs, o: &mut Out) {
                 flush!();
                 o.push(i, i + 1, Vs::Tilde);
                 i += 1;
+                run = i;
+            }
+            // typographic ligatures in prose: -- → –, --- → —, `` → “, '' → ”
+            b'-' if base != Vs::Mono && i + 1 < e && b[i + 1] == b'-' => {
+                flush!();
+                let three = i + 2 < e && b[i + 2] == b'-';
+                let w = if three { 3 } else { 2 };
+                o.push(i, i + w, glyph(if three { "—" } else { "–" }, base));
+                i += w;
+                run = i;
+            }
+            b'`' | b'\'' if base != Vs::Mono && i + 1 < e && b[i + 1] == c => {
+                flush!();
+                o.push(i, i + 2, glyph(if c == b'`' { "“" } else { "”" }, base));
+                i += 2;
                 run = i;
             }
             _ => i += 1,
@@ -472,6 +545,32 @@ pub struct VisualTheme {
     pub refc: Color32,
     pub env: Color32,
     pub chip_bg: Color32,
+    /// citation key → "Author Year"
+    pub cites: std::collections::HashMap<String, String>,
+}
+
+/// "Hopfner 2019; Malzbauer & Gerstner 2021" for the keys inside \cite{…}.
+pub fn cite_label(keys: &str, th: &VisualTheme) -> Option<String> {
+    let parts: Vec<&str> = keys.split(',').map(str::trim).filter(|k| !k.is_empty()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let labels: Vec<String> = parts.iter().map(|k| th.cites.get(*k).cloned().unwrap_or_else(|| k.to_string())).collect();
+    Some(labels.join("; "))
+}
+
+/// Font and width of the citation chip text.
+pub fn cite_font(th: &VisualTheme) -> FontId {
+    FontId::new(th.size * 0.78, FontFamily::Proportional)
+}
+
+/// Font and color a glyph is painted with (the style around it).
+pub fn glyph_format(ctx: Vs, th: &VisualTheme) -> TextFormat {
+    format_for(ctx, th, false)
+}
+
+pub fn cite_width(label: &str, th: &VisualTheme) -> f32 {
+    label.chars().count() as f32 * th.size * 0.78 * 0.52 + 10.0
 }
 
 impl VisualTheme {
@@ -487,6 +586,7 @@ impl VisualTheme {
             refc: p.cyan,
             env: mix(p.magenta, p.dim, 0.4),
             chip_bg: with_alpha(p.text, 16),
+            cites: Default::default(),
         }
     }
 }
@@ -566,7 +666,7 @@ fn format_for(st: Vs, th: &VisualTheme, revealed: bool) -> TextFormat {
                 f.extra_letter_spacing = 0.0;
             }
         }
-        Vs::Markup(ctx) => {
+        Vs::Markup(ctx) | Vs::Glyph(_, ctx) => {
             if revealed {
                 let base = format_for(*ctx, th, false);
                 f.font_id = FontId::new((base.font_id.size * 0.62).max(th.size * 0.72), FontFamily::Monospace);
@@ -588,12 +688,28 @@ pub fn layout_job(text: &str, spans: &[Span], th: &VisualTheme, raw: Option<(usi
     let mut job = LayoutJob { text: text.to_string(), ..Default::default() };
     for sp in spans {
         let in_raw = raw.is_some_and(|(a, b)| sp.s < b.max(a + 1) && sp.e > a);
-        let revealed = in_raw && matches!(sp.st, Vs::Markup(_) | Vs::ItemGap(_));
+        let revealed = in_raw && matches!(sp.st, Vs::Markup(_) | Vs::ItemGap(_) | Vs::Glyph(..));
         let mut fmt = format_for(sp.st, th, revealed);
         if in_raw && sp.st == Vs::Tilde {
             fmt.color = th.dim;
         }
-        job.sections.push(LayoutSection { leading_space: 0.0, byte_range: ByteIndex(sp.s)..ByteIndex(sp.e), format: fmt });
+        let mut leading = 0.0;
+        if !revealed {
+            if let Vs::Glyph(g, ctx) = sp.st {
+                // room for the glyph the editor paints in front of the hidden markup
+                leading = glyph_em(g) * format_for(*ctx, th, false).font_id.size;
+            }
+        }
+        if sp.st == Vs::Cite && !in_raw {
+            if let Some(label) = cite_label(&text[sp.s..sp.e], th) {
+                // hide the keys, reserve room for the "Author Year" chip
+                leading = cite_width(&label, th);
+                fmt.font_id = FontId::new(0.6, FontFamily::Monospace);
+                fmt.color = Color32::TRANSPARENT;
+                fmt.line_height = Some(0.5);
+            }
+        }
+        job.sections.push(LayoutSection { leading_space: leading, byte_range: ByteIndex(sp.s)..ByteIndex(sp.e), format: fmt });
     }
     if job.sections.is_empty() {
         job.sections.push(LayoutSection { leading_space: 0.0, byte_range: ByteIndex(0)..ByteIndex(0), format: format_for(Vs::Body, th, false) });
