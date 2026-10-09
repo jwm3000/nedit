@@ -152,6 +152,30 @@ impl Palette {
         }
     }
 
+    /// Parse an Omarchy `colors.toml`.
+    pub fn from_colors_toml(src: &str, name: &str) -> Option<Self> {
+        let tbl = src.parse::<toml::Table>().ok()?;
+        let g = |k: &str| tbl.get(k).and_then(|v| v.as_str()).and_then(hex);
+        let raw = Raw {
+            mode: tbl.get("mode").and_then(|v| v.as_str()).map(String::from),
+            background: g("background"),
+            dark_background: g("dark_background"),
+            foreground: g("foreground"),
+            bright_foreground: g("bright_foreground"),
+            accent: g("accent"),
+            selection: g("selection"),
+            red: g("red"),
+            yellow: g("yellow"),
+            orange: g("orange"),
+            green: g("green"),
+            cyan: g("cyan"),
+            blue: g("blue"),
+            magenta: g("magenta"),
+        };
+        raw.background?;
+        Some(Self::from_raw(&pretty_name(name), raw))
+    }
+
     pub fn load_dir(dir: &Path, name: &str) -> Option<Self> {
         let colors = dir.join("colors.toml");
         if let Ok(src) = std::fs::read_to_string(&colors) {
@@ -286,6 +310,38 @@ fn theme_roots() -> Vec<PathBuf> {
     vec![home().join(".config/omarchy/themes"), home().join(".local/share/omarchy/themes")]
 }
 
+/// Themes shipped with nEdit (Omarchy defaults, MIT) – available on every platform.
+pub const BUNDLED: &[(&str, &str)] = &[
+    ("catppuccin", include_str!("../assets/themes/catppuccin.toml")),
+    ("catppuccin-latte", include_str!("../assets/themes/catppuccin-latte.toml")),
+    ("everforest", include_str!("../assets/themes/everforest.toml")),
+    ("flexoki-light", include_str!("../assets/themes/flexoki-light.toml")),
+    ("gruvbox", include_str!("../assets/themes/gruvbox.toml")),
+    ("kanagawa", include_str!("../assets/themes/kanagawa.toml")),
+    ("matte-black", include_str!("../assets/themes/matte-black.toml")),
+    ("nord", include_str!("../assets/themes/nord.toml")),
+    ("osaka-jade", include_str!("../assets/themes/osaka-jade.toml")),
+    ("ristretto", include_str!("../assets/themes/ristretto.toml")),
+    ("rose-pine", include_str!("../assets/themes/rose-pine.toml")),
+    ("tokyo-night", include_str!("../assets/themes/tokyo-night.toml")),
+];
+
+pub fn omarchy_installed() -> bool {
+    state_dir().join("theme.name").exists() || theme_roots().iter().any(|r| r.exists())
+}
+
+/// All theme names: installed Omarchy themes plus the bundled ones (installed win).
+pub fn all_theme_names() -> Vec<String> {
+    let mut v: Vec<String> = list_themes().into_iter().map(|(n, _)| n).collect();
+    for (n, _) in BUNDLED {
+        if !v.iter().any(|x| x == n) {
+            v.push(n.to_string());
+        }
+    }
+    v.sort();
+    v
+}
+
 pub fn list_themes() -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for root in theme_roots() {
@@ -322,8 +378,12 @@ pub fn load_omarchy_current() -> Option<Palette> {
 }
 
 pub fn load_named(name: &str) -> Option<Palette> {
-    let p = list_themes().into_iter().find(|(n, _)| n == name)?.1;
-    Palette::load_dir(&p, name)
+    if let Some((_, p)) = list_themes().into_iter().find(|(n, _)| n == name) {
+        if let Some(pal) = Palette::load_dir(&p, name) {
+            return Some(pal);
+        }
+    }
+    BUNDLED.iter().find(|(n, _)| *n == name).and_then(|(n, src)| Palette::from_colors_toml(src, n))
 }
 
 /// Cheap change detection for the active Omarchy theme.
@@ -331,4 +391,17 @@ pub fn omarchy_stamp() -> Option<SystemTime> {
     let a = std::fs::metadata(state_dir().join("theme.name")).and_then(|m| m.modified()).ok();
     let b = std::fs::metadata(state_dir().join("theme/colors.toml")).and_then(|m| m.modified()).ok();
     a.max(b)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bundled_themes_parse() {
+        for (name, src) in super::BUNDLED {
+            let p = super::Palette::from_colors_toml(src, name).unwrap_or_else(|| panic!("{name}"));
+            assert!(!p.name.is_empty());
+        }
+        assert!(super::BUNDLED.len() >= 10);
+        assert!(super::load_named("tokyo-night").is_some());
+    }
 }

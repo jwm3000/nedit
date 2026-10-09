@@ -1,0 +1,39 @@
+\usepackage[most]{tcolorbox}
+\usepackage{lipsum,lmodern}
+\usepackage{fontawesome5}
+
+\newcounter{myboxcounter}
+
+\tcbset{
+    questionboxstyle/.style={
+        enhanced, breakable,
+        sharp corners,
+        left skip=8mm,
+        attach boxed title to top left={yshift*=-\tcboxedtitleheight/2},
+        boxed title style={colframe=#1!40, height=6mm, bean arc, boxrule=1pt},
+        colback=#1!10, colframe=#1!30, boxrule=1pt,
+        coltitle=black, colbacktitle=#1!10,
+        fonttitle=\bfseries,
+        underlay boxed title={%
+            \node[circle, fill=#1!10, draw=#1!40, inner sep=1pt, minimum size=6mm, line width=1pt, font=\bfseries, text=#1!40] (boxnumber) at ([xshift=-6mm]title.west) {\faQuestionCircle}; % Use custom symbol
+        },
+        underlay unbroken={%
+            \draw[#1!40, line width=1pt] (title.west)--(boxnumber);
+            \draw[#1!40, line width=1pt] (boxnumber)--(boxnumber|-frame.south) node[inner sep=0pt] {\rule{3mm}{0.5mm}}; % Line to bottom with horizontal line ending
+        },
+        underlay first={%
+            \draw[#1!40, line width=1pt] (title.west)--(boxnumber);
+            \draw[#1!40, line width=1pt] (boxnumber)--(boxnumber|-frame.south) node[inner sep=0pt] {\rule{3mm}{0.5mm}}; % Line to bottom with horizontal line ending
+        },
+        underlay middle={%
+            \draw[#1!40, line width=1pt] (boxnumber|-frame.north)--(boxnumber|-frame.south);
+        },
+        underlay last={%
+            \draw[#1!40, line width=1pt] (boxnumber|-frame.north)--(boxnumber|-frame.south) node[inner sep=0pt] {\rule{3mm}{0.5mm}}; % Line to bottom with horizontal line ending
+        },
+    }
+}
+
+\newtcolorbox[use counter=myboxcounter]{Question}[2][]{%
+    questionboxstyle=#2, title=#1
+}

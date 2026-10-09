@@ -1,114 +1,132 @@
-% ────────────────────────────────────────────
-%  Masterprüfung — Präsentation (TU Graz)
-%  Literatur kommt aus derselben Bibliothek wie die Masterarbeit.
-% ────────────────────────────────────────────
-\documentclass[aspectratio=169, 11pt]{beamer}
-\usetheme{TUGraz}
+% Adapted from the ITI template by Yavuz Koroglu, June-2023
+% Adapted from TU Graz Template for ITI by Michael Krisper, Sept-2020
+% Original Author: Maria Eichlseder
+% Design based on the PowerPoint template by Christina Fraueneder
+% Re-using some elements of the 2013 LaTeX template by Thomas Quaritsch
+% both available at
+% https://tu4u.tugraz.at/bedienstete/organisation-und-administration/vorlagen-und-corporate-design/downloads-und-anwendungen-logoformate-und-vorlagen/designlinien-und-vorlagen-download/charakteristika-designlinie-ic/vorlagen-download-designlinie-ic/
+% See also https://latex.tugraz.at/vorlagen/tugraz and https://github.com/quam426/tugPoster
+
+% nEdit baut vom Projektordner aus: Theme, theme/ und figures/ auch dort finden
+\makeatletter\def\input@path{{./}{praesentation/}}\makeatother
+
+\documentclass{beamer} % 4:3 (default)
+%\documentclass[aspectratio=169]{beamer}  % 16:9
+
+\usetheme[institute]{tugraz2018}
+% Further options: [ist], [iti], [tug] … institute colors; for 16:9 use \documentclass[aspectratio=169]{beamer}
 
 \usepackage[utf8]{inputenc}
-\usepackage{csquotes}
+\usepackage[english]{babel}
+\usepackage{multicol}
 \usepackage{booktabs}
-\usepackage{amsmath}
 \usepackage{pgfplots}\pgfplotsset{compat=1.18}
-% Literatur: biblatex + biber (natbib-Befehle wie \citep/\citet funktionieren weiter)
-\usepackage[backend=biber, style=authoryear, natbib=true, maxcitenames=2, uniquename=false]{biblatex}
-\addbibresource{references.bib}
 
-\title{Hopfen, Hefe, Hochgenuss}
-\subtitle{Gärtemperatur und Aroma obergäriger Biere -- Masterprüfung}
+%% Add your own packages, macros, etc.
+% ...
+
+%% Enter presentation metadata
+\title[Hops, Yeast, Pure Delight]{Hops, Yeast, Pure Delight\\Fermentation Temperature and Beer Aroma}
 \author{Norbert Winter}
-\institute{Institut für Brau- und Gärungstechnologie (fiktiv) \textbullet{} TU Graz}
+\institute{Institute of Brewing and Fermentation Technology (fictional)}
+\instituteurl{www.tugraz.at}
 \date{\today}
+
+%% Logos
+% \additionallogo{figures/logo}  % additional institute/department logo (footline; optional)
+% \logobar{Supported by: ...}  % sponsors (titlepage; optional)
+
 
 \begin{document}
 
-\begin{frame}[plain]
-  \titlepage
+\begin{frame}
+  \maketitle
 \end{frame}
 
-\begin{frame}{Agenda}
-  \tableofcontents
+
+\begin{frame}{Outline}
+    \begin{multicols}{2}
+        \tableofcontents
+    \end{multicols}
 \end{frame}
+
 
 \section{Motivation}
 
-\begin{frame}{Warum Bier?}
-  \begin{itemize}
-    \item Nur vier Zutaten -- und doch tausende Aromen
-    \item Ein Großteil des Aromas entsteht im \alert{Gärtank}
-    \item Systematische Daten zur Gärtemperatur fehlen \citep{malz2021ester}
-  \end{itemize}
+\begin{frame}{Why Beer?}
+  \begin{tugitemize}
+    \item Only four ingredients -- yet thousands of aromas
+    \item Much of the aroma is created in the \alert{fermenter}
+    \item Systematic data on fermentation temperature are missing
+  \end{tugitemize}
   \vspace{4mm}
-  \begin{block}{Forschungsfrage}
-    Wie stark prägt die Gärtemperatur das Aromaprofil obergäriger Biere?
+  \begin{block}{Research Question}
+    How strongly does fermentation temperature shape the aroma of top-fermented beers?
   \end{block}
 \end{frame}
 
-\section{Methodik}
+\section{Method}
 
-\begin{frame}{Vorgehen}
-  \begin{columns}[T]
-    \begin{column}{0.48\textwidth}
-      \begin{enumerate}
-        \item 12 Sude Pale Ale
-        \item 4 Temperaturstufen (16--24\,°C)
-        \item Gaschromatografie
-        \item Blindverkostung ($n=24$)
-      \end{enumerate}
+\begin{frame}{Approach}
+  \begin{tugcolumns}
+    \begin{column}{.48\linewidth}
+      \begin{tugenumerate}
+        \item 12 brews of pale ale
+        \item 4 temperature levels (16--24\,°C)
+        \item Gas chromatography
+        \item Blind tasting ($n=24$)
+      \end{tugenumerate}
     \end{column}
-    \begin{column}{0.48\textwidth}
-      \begin{exampleblock}{Arrhenius-Ansatz}
-        \[ k(T) = A \cdot \exp\!\left(-\frac{E_a}{R\,T}\right) \]
-      \end{exampleblock}
+    \begin{column}{.48\linewidth}
+      \begin{block}{Arrhenius}
+        \[ k(T) = A \cdot e^{-E_a / RT} \]
+      \end{block}
     \end{column}
-  \end{columns}
+  \end{tugcolumns}
 \end{frame}
 
-\section{Ergebnisse}
+\section{Results}
 
-\begin{frame}{Esterbildung}
+\begin{frame}{Ester Formation}
   \centering
   \begin{tikzpicture}
-    \begin{axis}[width=0.78\textwidth, height=5.4cm, xlabel={Gärtemperatur [°C]}, ylabel={mg/L},
-      grid=major, grid style={black!8}, legend pos=north west, legend style={draw=none, font=\small, fill=none},
-      every axis plot/.append style={very thick}]
-      \addplot[color=tured, mark=*] coordinates {(16,1.1) (18,1.5) (20,1.9) (22,2.6) (24,3.1)};
-      \addplot[color=tugray, mark=square*] coordinates {(16,0.4) (18,0.5) (20,0.6) (22,0.7) (24,0.8)};
-      \legend{Isoamylacetat (Banane), {Ethylhexanoat (Apfel, ×2)}}
+    \begin{axis}[width=0.85\linewidth, height=5cm, xlabel={Fermentation temperature [°C]}, ylabel={mg/L},
+      grid=major, grid style={black!8}, legend pos=north west, legend style={draw=none, font=\scriptsize, fill=none},
+      tick label style={font=\scriptsize}, label style={font=\scriptsize}, every axis plot/.append style={thick}]
+      \addplot[color=tugred, mark=*] coordinates {(16,1.1) (18,1.5) (20,1.9) (22,2.6) (24,3.1)};
+      \addplot[color=gray, mark=square*] coordinates {(16,0.4) (18,0.5) (20,0.6) (22,0.7) (24,0.8)};
+      \legend{Isoamyl acetate (banana), {Ethyl hexanoate (apple, ×2)}}
     \end{axis}
   \end{tikzpicture}
 \end{frame}
 
-\begin{frame}{Verkostung}
+\begin{frame}{Tasting}
   \centering
   \begin{tabular}{lrrr}
     \toprule
-    Gärtemperatur & Fruchtigkeit & Sauberkeit & Gesamt \\
+    Temperature & Fruitiness & Cleanness & Overall \\
     \midrule
-    16\,°C & 4{,}1 & 7{,}8 & 6{,}2 \\
-    \alert{18\,°C} & \alert{5{,}6} & \alert{7{,}2} & \alert{7{,}4} \\
-    20\,°C & 6{,}9 & 5{,}9 & 6{,}8 \\
-    24\,°C & 8{,}2 & 3{,}7 & 5{,}1 \\
+    16\,°C & 4.1 & 7.8 & 6.2 \\
+    \alert{18\,°C} & \alert{5.6} & \alert{7.2} & \alert{7.4} \\
+    20\,°C & 6.9 & 5.9 & 6.8 \\
+    24\,°C & 8.2 & 3.7 & 5.1 \\
     \bottomrule
   \end{tabular}
 \end{frame}
 
-\section{Fazit}
+\section*{}
 
-\begin{frame}{Fazit \& Ausblick}
-  \begin{itemize}
-    \item<1-> +4\,K $\Rightarrow$ rund +38\,\% Isoamylacetat
-    \item<2-> 18\,°C ist der Sweet Spot für ein Pale Ale
-    \item<3-> Nächster Schritt: Kveik-Hefen und Temperaturprofile
-  \end{itemize}
+\begin{frame}{Conclusion}
+  \begin{tugitemize}
+    \item<1-> +4\,K $\Rightarrow$ about +38\,\% isoamyl acetate
+    \item<2-> 18\,°C is the sweet spot for a pale ale
+    \item<3-> Next: kveik yeasts and temperature profiles
+  \end{tugitemize}
 \end{frame}
 
-\danke
-
-% ── Backup / Anhang ──
-\begin{frame}{Literatur}
-  \scriptsize
-  \printbibliography[heading=none]
+\begin{frame}[c]
+  \centering
+  \Large Questions?
 \end{frame}
 
 \end{document}

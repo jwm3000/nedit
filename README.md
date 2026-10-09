@@ -4,7 +4,7 @@
 
 # nEdit – LaTeX Studio
 
-**Ein nativer LaTeX-Editor in Rust – gebaut für die Masterarbeit.**<br>
+**Ein nativer LaTeX-Editor in Rust – gebaut für die Masterarbeit an der TU Graz.**<br>
 Live-PDF wie bei Overleaf, ein visueller Schreibmodus, eine Literatur-Bibliothek,
 Präsentationen im TU-Graz-Design und Git – alles offline, alles in einer App.
 
@@ -24,6 +24,7 @@ Präsentationen im TU-Graz-Design und Git – alles offline, alles in einer App.
 ## Inhalt
 
 - [Was nEdit kann](#was-nedit-kann)
+- [Sofort loslegen: TU-Graz-Vorlagen](#sofort-loslegen-tu-graz-vorlagen)
 - [Beispiel: eine (erfundene) Masterarbeit über Bier](#beispiel-eine-erfundene-masterarbeit-über-bier)
 - [Installation](#installation) · [Updates](#3-aktualisieren)
 - [Tastenkürzel](#tastenkürzel)
@@ -65,6 +66,8 @@ Zweimal kurz **Umschalt** drücken (oder **Strg+P**) öffnet ein schwebendes Suc
 allem: zuletzt geöffnete Dateien, alle Projektdateien, Kapitel und Abschnitte (aus Arbeit
 und Folien), Literatur (Enter fügt `\citep{…}` ein) und Befehle – mit Unschärfesuche.
 Präfixe: `#` Gliederung, `@` Literatur, `>` Befehle, `:42` springt zu Zeile 42.
+
+<img src="docs/screenshots/schnellsuche.png" alt="Schnellsuche">
 
 ### ⚡ Autovervollständigung
 
@@ -112,7 +115,7 @@ Ein Regal für die Literatur der Arbeit – gespeichert in `references.bib`:
 
 <img src="docs/screenshots/praesentation.png" alt="Präsentations-Arbeitsbereich">
 
-Ein eigener Arbeitsbereich für die Folien (Beamer, 16:9) mit **TU-Graz-Theme**:
+Ein eigener Arbeitsbereich für die Folien mit dem **TU-Graz-Beamer-Theme**:
 Filmstreifen aller Folien, Editor mit Folien-Bausteinen (Folie, zwei Spalten, Bildfolie,
 schrittweise Aufzählung, Block, Formel …) und eine Bühne, die automatisch die Folie unter
 dem Cursor zeigt. Die Literatur kommt aus derselben Bibliothek wie die Arbeit.
@@ -132,13 +135,20 @@ dem Cursor zeigt. Die Literatur kommt aus derselben Bibliothek wie die Arbeit.
 - Diff **inline** oder **nebeneinander** (zwei Spalten wie auf GitHub, mit Hervorhebung der geänderten Wörter)
 - Verlauf als Zeitleiste, jeder Commit mit Diff – einzelne Dateien lassen sich auf einen
   früheren Stand zurücksetzen
+- Änderungen verwerfen per Rechtsklick im Dateibaum (Datei oder Ordner) oder im Git-Panel –
+  offene Editoren übernehmen den zurückgesetzten Stand sofort
+
+<img src="docs/screenshots/diff.png" alt="Diff nebeneinander">
 
 ### 🎨 Themes
 
 <img src="docs/screenshots/themes.png" alt="Omarchy-Themes">
 
 nEdit übernimmt automatisch das aktive [Omarchy](https://omarchy.org)-Theme und wechselt
-live mit. Ohne Omarchy gibt es das eingebaute „nEdit Ink“-Theme.
+live mit. Auf **Windows, macOS** und anderen Linux-Systemen stehen **12 eingebaute Themes**
+zur Auswahl (Tokyo Night, Catppuccin, Catppuccin Latte, Gruvbox, Nord, Rosé Pine,
+Everforest, Kanagawa, Flexoki Light, Matte Black, Osaka Jade, Ristretto) – plus das
+eigene „nEdit Ink“. Umschalten über das Pinsel-Symbol oder die Schnellsuche (`> Theme`).
 
 ### 📁 Dateien
 
@@ -149,14 +159,30 @@ eingebunden, und beim Umbenennen/Verschieben werden `\input`, `\include` und
 
 ---
 
+## Sofort loslegen: TU-Graz-Vorlagen
+
+Ein neues Projekt startet mit den **offiziellen TU-Graz-Vorlagen**, mit Platzhaltern
+befüllt und sofort kompilierbar:
+
+| Masterarbeit | Präsentation (Masterprüfung) |
+| --- | --- |
+| KOMA-Script-Vorlage für Abschlussarbeiten an der TU Graz (Titelblatt, eidesstattliche Erklärung, Abstract/Kurzfassung, biblatex/APA, Ludografie) | TU-Graz-Beamer-Theme 2018 (Titelfolie, Gliederung, Listen, Bilder, Blöcke, Spalten) |
+| `main.tex`, `template/`, `content/*.tex`, `figures/` | `praesentation/folien.tex`, `beamerthemetugraz2018.sty`, `theme/` |
+
+Name, Titel, Betreuung und Institut trägst du oben in `main.tex` bzw. `praesentation/folien.tex`
+ein; die Kapitel liegen in `content/`. Neue Kapitel legst du im Dateibaum an – sie werden
+automatisch per `\include` in `main.tex` eingebunden.
+
+---
+
 ## Beispiel: eine (erfundene) Masterarbeit über Bier
 
 Im Ordner [`examples/bier-masterarbeit`](examples/bier-masterarbeit) liegt das Projekt aus
-den Screenshots: **„Hopfen, Hefe, Hochgenuss – Der Einfluss der Gärtemperatur auf das
-Aromaprofil obergäriger Biere“** von Norbert Winter. Inhalt, Daten und Quellen sind frei
-erfunden.
+den Screenshots – die TU-Graz-Vorlagen, befüllt mit **„Hops, Yeast, Pure Delight: How
+Fermentation Temperature Shapes the Aroma of Top-Fermented Beers“** von Norbert Winter.
+Inhalt, Daten, Quellen und Betreuung sind frei erfunden.
 
-| Masterarbeit (KOMA-Script, Libertinus) | Präsentation (TU-Graz-Beamer-Theme) |
+| Masterarbeit (TU-Graz-Vorlage) | Präsentation (TU-Graz-Beamer-Theme) |
 | :---: | :---: |
 | [<img src="docs/screenshots/arbeit-seiten.png" alt="Seiten der Masterarbeit">](docs/pdf/beispiel-masterarbeit.pdf) | [<img src="docs/screenshots/folien.png" alt="Folien">](docs/pdf/beispiel-praesentation-tugraz.pdf) |
 | [📄 PDF ansehen](docs/pdf/beispiel-masterarbeit.pdf) | [📄 PDF ansehen](docs/pdf/beispiel-praesentation-tugraz.pdf) |
@@ -178,8 +204,8 @@ nEdit ist ein Editor – gesetzt wird mit einer normalen TeX-Distribution. Benö
 | Werkzeug | Wofür | Linux (Arch) | Debian/Ubuntu | macOS (Homebrew) | Windows |
 | --- | --- | --- | --- | --- | --- |
 | **TeX Live** inkl. `latexmk`, `synctex`, `bibtex` | Kompilieren, PDF↔Quelle | `texlive-basic texlive-latexextra texlive-fontsextra texlive-binextra` | `texlive-full` | `brew install --cask mactex` | [TeX Live](https://tug.org/texlive/) oder MiKTeX (+ Perl für latexmk) |
-| **biber** | biblatex (Präsentationsvorlage) | `biber` | `biber` | in MacTeX enthalten | in TeX Live enthalten |
-| **Deutsche Silbentrennung** | `babel` mit `ngerman` | `texlive-langgerman` | in `texlive-full` | in MacTeX enthalten | in TeX Live enthalten |
+| **biber** | Literaturverzeichnis der Vorlage (biblatex) – **erforderlich** | `biber` | `biber` | in MacTeX enthalten | in TeX Live enthalten |
+| **Deutsche Silbentrennung** | Kurzfassung auf Deutsch (optional, sonst nur Englisch) | `texlive-langgerman` | in `texlive-full` | in MacTeX enthalten | in TeX Live enthalten |
 | **Poppler** (`pdftoppm`, `pdfinfo`, `pdftotext`) | PDF-Vorschau, PDF-Import | `poppler` | `poppler-utils` | `brew install poppler` | `scoop install poppler` |
 | **git** *(optional)* | Versionen & Verlauf | `git` | `git` | `xcode-select --install` | [git-scm.com](https://git-scm.com) |
 | **Rust** *(zum Bauen)* | — | `rust` | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) |
@@ -255,13 +281,16 @@ Projekte liegen in `~/Documents/nEdit-Projekte/` (änderbar mit `NEDIT_PROJECTS`
 Ein neues Projekt entsteht aus der Vorlage in [`templates/masterarbeit`](templates/masterarbeit):
 
 ```
-main.tex                    Hauptdokument (KOMA-Script scrreprt)
-kapitel/*.tex               Kapitel
-references.bib              Bibliothek (BibTeX)
+main.tex                    Hauptdokument: Metadaten (Name, Titel, Betreuung …) und Kapitelliste
+template/                   TU-Graz-Vorlage: Präambel, Titelblatt, Erklärung, Typografie
+content/*.tex               Kapitel (Introduction, Background, Design, Implementation, …)
+content/appendix/           Anhang
+figures/                    Abbildungen (enthält das TU-Graz-Logo für das Titelblatt)
+references.bib              Bibliothek (BibTeX/biblatex) – wird vom Bibliothek-Tab gepflegt
+games.bib                   Ludografie (Spiele als Quellen)
 papers/                     PDFs der Bibliothek
-abbildungen/                Bilder
-praesentation/folien.tex    Masterprüfung (Beamer, 16:9)
-praesentation/beamerthemeTUGraz.sty
+praesentation/folien.tex    Masterprüfung (TU-Graz-Beamer-Theme 2018)
+praesentation/theme/        Hintergründe und Logo des Themes
 .nedit/                     Projekteinstellungen, Bibliotheks-Metadaten, Build-Ausgabe
 ```
 
@@ -271,7 +300,8 @@ nEdit legt die `.nedit/`-Einstellungen beim ersten Öffnen an.
 Quellcode in [`src/`](src): `editor.rs` (Editor & Highlighting), `visual.rs` (visueller
 Modus), `pdfview.rs` (PDF-Vorschau), `compile.rs` (latexmk, Log, SyncTeX), `shelf.rs` /
 `shelf_ui.rs` (Bibliothek), `git.rs`, `filetree.rs`, `workspace.rs` (Arbeitsbereiche),
-`theme.rs` (Omarchy-Themes), `platform.rs` (Linux/macOS/Windows).
+`theme.rs` (Themes), `quickopen.rs` (Schnellsuche), `vim.rs` (Vim-Modus), `help.rs` (Hilfe),
+`i18n.rs` (Deutsch/Englisch), `updater.rs` (Updates), `platform.rs` (Linux/macOS/Windows).
 
 ---
 
@@ -291,9 +321,16 @@ Rückmeldungen und Pull Requests sind willkommen.
 
 - Oberfläche auf **Deutsch** (Standard) oder **Englisch** – umschaltbar im ⚙-Menü.
 - nEdit steht unter der [MIT-Lizenz](LICENSE) – © 2026 Norbert Winter.
-- Das TU-Graz-Beamer-Theme ist eine **inoffizielle** Nachempfindung und steht in keiner
-  Verbindung zur TU Graz. Das offizielle Logo ist nicht enthalten – lege es als
-  `praesentation/tugraz-logo.pdf` ab, dann ersetzt es automatisch den Platzhalter.
+- **Vorlagen** in [`templates/masterarbeit`](templates/masterarbeit) (nicht Teil der MIT-Lizenz):
+  - Thesis: LaTeX-KOMA-Vorlage von Karl Voit et al. ([novoid/LaTeX-KOMA-template](https://github.com/novoid/LaTeX-KOMA-template)),
+    TU-Graz-Titelblatt von Stefan Kroboth und Karl Voit – **CC BY-SA 3.0**.
+  - Präsentation: TU-Graz-Beamer-Theme 2018 von Maria Eichlseder, angepasst von Michael Krisper
+    und Yavuz Koroglu, Design nach der TU-Graz-Vorlage von Christina Fraueneder
+    ([latex.tugraz.at](https://latex.tugraz.at/vorlagen/tugraz)).
+  - Logos und Corporate Design gehören der TU Graz. nEdit ist ein privates Projekt und steht in
+    keiner offiziellen Verbindung zur TU Graz.
+- Eingebaute Theme-Farben stammen aus [Omarchy](https://github.com/basecamp/omarchy) (MIT, siehe
+  [`assets/themes`](assets/themes)).
 - Die Icon-Schrift stammt aus [Nerd Fonts](https://www.nerdfonts.com) (MIT, siehe
   [`assets/fonts`](assets/fonts)). Text- und Serifenschriften werden aus dem System bzw. der
   TeX-Distribution geladen (Libertinus, Source Sans/Code Pro).

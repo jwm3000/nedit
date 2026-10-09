@@ -32,22 +32,39 @@ pub struct Project {
     pub config: ProjectConfig,
 }
 
-const TEMPLATE: &[(&str, &str)] = &[
-    ("main.tex", include_str!("../templates/masterarbeit/main.tex")),
-    ("references.bib", include_str!("../templates/masterarbeit/references.bib")),
-    ("kapitel/titelseite.tex", include_str!("../templates/masterarbeit/kapitel/titelseite.tex")),
-    ("kapitel/abstract.tex", include_str!("../templates/masterarbeit/kapitel/abstract.tex")),
-    ("kapitel/einleitung.tex", include_str!("../templates/masterarbeit/kapitel/einleitung.tex")),
-    ("kapitel/grundlagen.tex", include_str!("../templates/masterarbeit/kapitel/grundlagen.tex")),
-    ("kapitel/methodik.tex", include_str!("../templates/masterarbeit/kapitel/methodik.tex")),
-    ("kapitel/ergebnisse.tex", include_str!("../templates/masterarbeit/kapitel/ergebnisse.tex")),
-    ("kapitel/fazit.tex", include_str!("../templates/masterarbeit/kapitel/fazit.tex")),
-    ("kapitel/anhang.tex", include_str!("../templates/masterarbeit/kapitel/anhang.tex")),
-    ("kapitel/deutsch-fallback.tex", include_str!("../templates/masterarbeit/kapitel/deutsch-fallback.tex")),
-    ("praesentation/folien.tex", include_str!("../templates/masterarbeit/praesentation/folien.tex")),
-    ("praesentation/beamerthemeTUGraz.sty", include_str!("../templates/masterarbeit/praesentation/beamerthemeTUGraz.sty")),
-    ("abbildungen/.keep", ""),
-    ("papers/.keep", ""),
+/// New projects: official TU Graz thesis template (KOMA, by Karl Voit et al., CC BY-SA 3.0)
+/// and TU Graz Beamer theme 2018 – filled with placeholder content.
+const TEMPLATE: &[(&str, &[u8])] = &[
+    ("content/abstract.tex", include_bytes!("../templates/masterarbeit/content/abstract.tex")),
+    ("content/acknowledgement.tex", include_bytes!("../templates/masterarbeit/content/acknowledgement.tex")),
+    ("content/appendix/appendix1.tex", include_bytes!("../templates/masterarbeit/content/appendix/appendix1.tex")),
+    ("content/background.tex", include_bytes!("../templates/masterarbeit/content/background.tex")),
+    ("content/conclusion.tex", include_bytes!("../templates/masterarbeit/content/conclusion.tex")),
+    ("content/design.tex", include_bytes!("../templates/masterarbeit/content/design.tex")),
+    ("content/evaluation.tex", include_bytes!("../templates/masterarbeit/content/evaluation.tex")),
+    ("content/future_work.tex", include_bytes!("../templates/masterarbeit/content/future_work.tex")),
+    ("content/implementation.tex", include_bytes!("../templates/masterarbeit/content/implementation.tex")),
+    ("content/introduction.tex", include_bytes!("../templates/masterarbeit/content/introduction.tex")),
+    ("content/lessons_learned.tex", include_bytes!("../templates/masterarbeit/content/lessons_learned.tex")),
+    ("figures/TU_Graz_Logo.pdf", include_bytes!("../templates/masterarbeit/figures/TU_Graz_Logo.pdf")),
+    ("games.bib", include_bytes!("../templates/masterarbeit/games.bib")),
+    ("main.tex", include_bytes!("../templates/masterarbeit/main.tex")),
+    ("papers/.keep", include_bytes!("../templates/masterarbeit/papers/.keep")),
+    ("praesentation/beamerthemetugraz2018.sty", include_bytes!("../templates/masterarbeit/praesentation/beamerthemetugraz2018.sty")),
+    ("praesentation/figures/photoexample-169.jpg", include_bytes!("../templates/masterarbeit/praesentation/figures/photoexample-169.jpg")),
+    ("praesentation/folien.tex", include_bytes!("../templates/masterarbeit/praesentation/folien.tex")),
+    ("praesentation/theme/TUGRAZ.pdf", include_bytes!("../templates/masterarbeit/praesentation/theme/TUGRAZ.pdf")),
+    ("praesentation/theme/background_16-9.png", include_bytes!("../templates/masterarbeit/praesentation/theme/background_16-9.png")),
+    ("praesentation/theme/background_4-3.png", include_bytes!("../templates/masterarbeit/praesentation/theme/background_4-3.png")),
+    ("references.bib", include_bytes!("../templates/masterarbeit/references.bib")),
+    ("template/custom_box.tex", include_bytes!("../templates/masterarbeit/template/custom_box.tex")),
+    ("template/declaration_TU_Graz.tex", include_bytes!("../templates/masterarbeit/template/declaration_TU_Graz.tex")),
+    ("template/mycommands.tex", include_bytes!("../templates/masterarbeit/template/mycommands.tex")),
+    ("template/pdf_settings.tex", include_bytes!("../templates/masterarbeit/template/pdf_settings.tex")),
+    ("template/preamble.tex", include_bytes!("../templates/masterarbeit/template/preamble.tex")),
+    ("template/title_Thesis_TU_Graz.tex", include_bytes!("../templates/masterarbeit/template/title_Thesis_TU_Graz.tex")),
+    ("template/title_plain_maketitle.tex", include_bytes!("../templates/masterarbeit/template/title_plain_maketitle.tex")),
+    ("template/typographic_settings.tex", include_bytes!("../templates/masterarbeit/template/typographic_settings.tex")),
 ];
 
 pub fn projects_dir() -> PathBuf {
@@ -90,8 +107,11 @@ impl Project {
                 std::fs::create_dir_all(d)?;
             }
             if !p.exists() {
-                let c = if author.is_empty() { content.to_string() } else { content.replace("Norbert Winter", author) };
-                std::fs::write(&p, c)?;
+                // text files get the author name filled in, binary files are copied as they are
+                match std::str::from_utf8(content) {
+                    Ok(text) if !author.is_empty() => std::fs::write(&p, text.replace("Your Name", author))?,
+                    _ => std::fs::write(&p, content)?,
+                }
             }
         }
         std::fs::write(root.join(".gitignore"), ".nedit/build/\n")?;
@@ -288,4 +308,29 @@ pub fn document_files(main: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<
         out.push(main.to_string());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs TeX Live with biber"]
+    fn template_compiles() {
+        let dir = std::env::temp_dir().join(format!("nedit-tpl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: test-only, single-threaded use of the env var
+        unsafe { std::env::set_var("NEDIT_PROJECTS", &dir) };
+        let p = Project::create("Masterarbeit", "Erika Muster").unwrap();
+        let main = std::fs::read_to_string(p.root.join("main.tex")).unwrap();
+        assert!(main.contains("Erika Muster"));
+        for (main, out) in [("main.tex", ".nedit/build/arbeit"), ("praesentation/folien.tex", ".nedit/build/praesentation")] {
+            let spec = crate::compile::CompileSpec { root: p.root.clone(), main: main.into(), outdir: out.into(), engine: "pdflatex".into() };
+            let r = crate::compile::run_for_test(&spec);
+            let errors: Vec<_> = r.issues.iter().filter(|i| i.level == crate::compile::Level::Error).collect();
+            assert!(errors.is_empty(), "{main}: {errors:?}");
+            assert!(r.pdf.is_some(), "{main}: no PDF");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

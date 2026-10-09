@@ -314,19 +314,7 @@ fn editor_area(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         let w = width_of(rel);
         let left = (px - grab).clamp(strip.min.x + 6.0, (strip.max.x - w - 6.0).max(strip.min.x + 6.0));
         drag_x = Some(left);
-        let center = left + w / 2.0;
-        order.retain(|r| r != rel);
-        let mut x = strip.min.x + 6.0;
-        let mut idx = order.len();
-        for (k, r) in order.iter().enumerate() {
-            let wr = width_of(r);
-            if center < x + wr / 2.0 {
-                idx = k;
-                break;
-            }
-            x += wr + 2.0;
-        }
-        order.insert(idx, rel.clone());
+        order = reorder_for_drag(&tabs, rel, left, left + w, strip.min.x + 6.0, &width_of);
     }
     // target x positions in display order (animated so tabs glide into place)
     let mut xs: Vec<(String, f32)> = vec![];
@@ -1960,4 +1948,51 @@ fn split_diff(ui: &mut Ui, lines: &[(crate::git::DiffKind, String)], pal: &Palet
             }
         }
     });
+}
+
+/// Sortable-list rule: a tab left of the dragged one moves aside once the dragged tab's
+/// *left* edge passes its middle, a tab to the right once the *right* edge does. This works
+/// for tabs of any width (a wide tab can be dropped before a narrow one).
+fn reorder_for_drag(tabs: &[String], dragged: &str, left: f32, right: f32, x0: f32, width_of: &dyn Fn(&String) -> f32) -> Vec<String> {
+    let od = tabs.iter().position(|t| t == dragged).unwrap_or(0);
+    // middles in the original layout
+    let mut x = x0;
+    let mut mids = vec![];
+    for t in tabs {
+        let w = width_of(t);
+        mids.push(x + w / 2.0);
+        x += w + 2.0;
+    }
+    let mut before = 0; // others that end up before the dragged tab
+    for (j, _) in tabs.iter().enumerate() {
+        if j == od {
+            continue;
+        }
+        let displaced = if j < od { left < mids[j] } else { right > mids[j] };
+        if (j < od && !displaced) || (j > od && displaced) {
+            before += 1;
+        }
+    }
+    let mut order: Vec<String> = tabs.iter().filter(|t| *t != dragged).cloned().collect();
+    order.insert(before.min(order.len()), dragged.to_string());
+    order
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reorder_for_drag;
+
+    #[test]
+    fn wide_tab_can_move_before_narrow() {
+        let tabs: Vec<String> = ["a", "bbbbbbbbbbbbbbbb", "c"].iter().map(|s| s.to_string()).collect();
+        let w = |t: &String| if t.len() > 3 { 200.0 } else { 60.0 };
+        // drag the wide tab fully to the left edge (left = x0)
+        assert_eq!(reorder_for_drag(&tabs, "bbbbbbbbbbbbbbbb", 0.0, 200.0, 0.0, &w), vec!["bbbbbbbbbbbbbbbb", "a", "c"]);
+        // and fully to the right (right edge beyond c's middle)
+        assert_eq!(reorder_for_drag(&tabs, "bbbbbbbbbbbbbbbb", 100.0, 300.0, 0.0, &w), vec!["a", "c", "bbbbbbbbbbbbbbbb"]);
+        // small move keeps the order
+        assert_eq!(reorder_for_drag(&tabs, "bbbbbbbbbbbbbbbb", 70.0, 270.0, 0.0, &w), tabs);
+        // narrow tab over a wide one
+        assert_eq!(reorder_for_drag(&tabs, "a", 120.0, 180.0, 0.0, &w), vec!["bbbbbbbbbbbbbbbb", "a", "c"]);
+    }
 }

@@ -64,6 +64,11 @@ pub fn start(spec: CompileSpec, ctx: egui::Context) -> CompileJob {
     CompileJob { rx }
 }
 
+#[cfg(test)]
+pub fn run_for_test(spec: &CompileSpec) -> CompileResult {
+    run(spec)
+}
+
 fn run(spec: &CompileSpec) -> CompileResult {
     let t0 = Instant::now();
     let outdir = spec.root.join(&spec.outdir);

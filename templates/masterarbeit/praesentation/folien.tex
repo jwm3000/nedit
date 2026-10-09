@@ -1,112 +1,135 @@
-% ────────────────────────────────────────────
-%  Masterprüfung — Präsentation (TU Graz)
-%  Literatur kommt aus derselben Bibliothek wie die Masterarbeit.
-% ────────────────────────────────────────────
-\documentclass[aspectratio=169, 11pt]{beamer}
-\usetheme{TUGraz}
+% Adapted from the ITI template by Yavuz Koroglu, June-2023
+% Adapted from TU Graz Template for ITI by Michael Krisper, Sept-2020
+% Original Author: Maria Eichlseder
+% Design based on the PowerPoint template by Christina Fraueneder
+% Re-using some elements of the 2013 LaTeX template by Thomas Quaritsch
+% both available at
+% https://tu4u.tugraz.at/bedienstete/organisation-und-administration/vorlagen-und-corporate-design/downloads-und-anwendungen-logoformate-und-vorlagen/designlinien-und-vorlagen-download/charakteristika-designlinie-ic/vorlagen-download-designlinie-ic/
+% See also https://latex.tugraz.at/vorlagen/tugraz and https://github.com/quam426/tugPoster
+
+% nEdit baut vom Projektordner aus: Theme, theme/ und figures/ auch dort finden
+\makeatletter\def\input@path{{./}{praesentation/}}\makeatother
+
+\documentclass{beamer} % 4:3 (default)
+%\documentclass[aspectratio=169]{beamer}  % 16:9
+
+\usetheme[institute]{tugraz2018}
+% Further options: [ist], [iti], [tug] … institute colors; for 16:9 use \documentclass[aspectratio=169]{beamer}
 
 \usepackage[utf8]{inputenc}
-\usepackage{csquotes}
-\usepackage{booktabs}
-\usepackage{amsmath}
-\usepackage{pgfplots}\pgfplotsset{compat=1.18}
-% Literatur: biblatex + biber (natbib-Befehle wie \citep/\citet funktionieren weiter)
-\usepackage[backend=biber, style=authoryear, natbib=true, maxcitenames=2, uniquename=false]{biblatex}
-\addbibresource{references.bib}
+\usepackage[english]{babel}
+\usepackage{multicol}
 
-\title{Titel der Masterarbeit}
-\subtitle{Masterprüfung}
-\author{Norbert Winter}
-\institute{Institut für … \textbullet{} Technische Universität Graz}
+%% Add your own packages, macros, etc.
+% ...
+
+%% Enter presentation metadata
+\title[Master's Thesis]{Title of the Master's Thesis\\Master's Examination}
+\author{Your Name}
+\institute{Institute of …}
+\instituteurl{www.tugraz.at}
 \date{\today}
+
+%% Logos
+% \additionallogo{figures/logo}  % additional institute/department logo (footline; optional)
+% \logobar{Supported by: ...}  % sponsors (titlepage; optional)
+
 
 \begin{document}
 
-\begin{frame}[plain]
-  \titlepage
+\begin{frame}
+  \maketitle
 \end{frame}
 
-\begin{frame}{Agenda}
-  \tableofcontents
+
+\begin{frame}{Outline}
+    \begin{multicols}{2}
+        \tableofcontents
+    \end{multicols}
 \end{frame}
 
-\section{Motivation}
 
-\begin{frame}{Warum dieses Thema?}
-  \begin{itemize}
-    \item Ausgangslage und Problem in einem Satz
-    \item Relevanz für Forschung und Praxis
-    \item Lücke in der bestehenden Literatur \citep{knuth1984texbook}
-  \end{itemize}
-  \vspace{4mm}
-  \begin{block}{Forschungsfrage}
-    Wie lässt sich \dots{} verbessern?
-  \end{block}
+\section{Introduction}
+
+\begin{frame}{}
+  A text frame
 \end{frame}
 
-\section{Methodik}
 
-\begin{frame}{Vorgehen}
-  \begin{columns}[T]
-    \begin{column}{0.48\textwidth}
-      \begin{enumerate}
-        \item Literaturrecherche
-        \item Konzept \& Modell
-        \item Implementierung
-        \item Evaluation
-      \end{enumerate}
-    \end{column}
-    \begin{column}{0.48\textwidth}
-      \begin{exampleblock}{Zielfunktion}
-        \[ \mathcal{L}(\theta) = -\frac{1}{N}\sum_{i=1}^{N}\log p_\theta(y_i\mid x_i) \]
-      \end{exampleblock}
-    \end{column}
-  \end{columns}
+\section{Content}
+
+\subsection{Lists}
+
+\begin{frame}{}
+  \begin{tugitemize}
+    \item First item
+    \item Second item
+    \item Third item
+  \end{tugitemize}
 \end{frame}
 
-\section{Ergebnisse}
 
-\begin{frame}{Ergebnisse im Überblick}
+\subsection{Numbered Lists}
+
+\begin{frame}{}
+  \begin{tugenumerate}
+    \item First item
+      \begin{tugenumerate}
+        \item First subitem
+          \begin{tugenumerate}
+            \item First 
+            \item Second
+          \end{tugenumerate}
+      \end{tugenumerate}
+      \pause
+    \item Second item
+      \pause
+    \item Third item
+  \end{tugenumerate}
+\end{frame}
+
+
+\subsection{An Image}
+
+\begin{frame}{}
   \centering
-  \begin{tikzpicture}
-    \begin{axis}[width=0.78\textwidth, height=5.4cm, xlabel={Epoche}, ylabel={Genauigkeit},
-      grid=major, grid style={black!8}, legend pos=south east, legend style={draw=none, font=\small},
-      every axis plot/.append style={very thick}]
-      \addplot[color=tured, mark=*] coordinates {(1,0.52) (2,0.67) (3,0.75) (4,0.81) (5,0.84) (6,0.86)};
-      \addplot[color=tugray, mark=square*] coordinates {(1,0.48) (2,0.58) (3,0.66) (4,0.71) (5,0.74) (6,0.75)};
-      \legend{Unser Ansatz, Baseline}
-    \end{axis}
-  \end{tikzpicture}
+  \includegraphics[height=0.6\textheight]{figures/photoexample-169}
 \end{frame}
 
-\begin{frame}{Kennzahlen}
+\subsection{A Block}
+
+\begin{frame}{}
+    \begin{block}{A Block}
+        
+    \end{block}
+    \begin{block}{Another Block}
+        
+    \end{block}
+
+    \begin{tugcolumns}
+        \begin{column}{.48\linewidth}
+            \begin{block}{Side-by-side}
+                
+            \end{block}
+        \end{column}
+        \begin{column}{.48\linewidth}
+            \begin{block}{Blocks!}
+                
+            \end{block}
+        \end{column}
+    \end{tugcolumns}
+\end{frame}
+
+\section*{}
+
+\begin{frame}{Conclusion}
+  ...
+\end{frame}
+
+%\begin{frame}[c,plain]
+\begin{frame}[c]
   \centering
-  \begin{tabular}{lrr}
-    \toprule
-    Methode     & Genauigkeit & Laufzeit \\
-    \midrule
-    Baseline    & 75{,}1\,\%  & 12{,}4\,h \\
-    \alert{Unser Ansatz} & \alert{86{,}3\,\%} & \alert{9{,}8\,h} \\
-    \bottomrule
-  \end{tabular}
-\end{frame}
-
-\section{Fazit}
-
-\begin{frame}{Fazit \& Ausblick}
-  \begin{itemize}
-    \item<1-> Kernaussage 1
-    \item<2-> Kernaussage 2
-    \item<3-> Offene Fragen und nächste Schritte
-  \end{itemize}
-\end{frame}
-
-\danke
-
-% ── Backup / Anhang ──
-\begin{frame}{Literatur}
-  \scriptsize
-  \printbibliography[heading=none]
+  \Large Questions?
 \end{frame}
 
 \end{document}

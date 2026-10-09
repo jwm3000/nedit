@@ -1341,18 +1341,23 @@ impl App {
                             ui.set_min_width(250.0);
                             widgets::section_label(ui, "Theme", pal);
                             let follow = self.settings.theme.is_none();
-                            let cur = theme::current_omarchy_name().map(|n| theme::pretty_name(&n)).unwrap_or_default();
-                            if ui.selectable_label(follow, trf!("{}  Omarchy folgen  ·  {cur}" | "{}  Follow Omarchy  ·  {cur}", ic::MAGIC)).clicked() {
-                                self.set_theme(None, &ctx);
+                            let omarchy = theme::omarchy_installed();
+                            if omarchy {
+                                let cur = theme::current_omarchy_name().map(|n| theme::pretty_name(&n)).unwrap_or_default();
+                                if ui.selectable_label(follow, trf!("{}  Omarchy folgen  ·  {cur}" | "{}  Follow Omarchy  ·  {cur}", ic::MAGIC)).clicked() {
+                                    self.set_theme(None, &ctx);
+                                }
                             }
-                            if ui.selectable_label(self.settings.theme.as_deref() == Some("nedit"), format!("{}  nEdit Ink", ic::MOON)).clicked() {
+                            // without Omarchy, "no theme chosen" means nEdit Ink
+                            let ink = self.settings.theme.as_deref() == Some("nedit") || (follow && !omarchy);
+                            if ui.selectable_label(ink, format!("{}  nEdit Ink", ic::MOON)).clicked() {
                                 self.set_theme(Some("nedit".into()), &ctx);
                             }
                             ui.separator();
                             egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
-                                for (name, path) in theme::list_themes() {
+                                for name in theme::all_theme_names() {
                                     let sel = self.settings.theme.as_deref() == Some(name.as_str());
-                                    let p = theme::Palette::load_dir(&path, &name);
+                                    let p = theme::load_named(&name);
                                     ui.horizontal(|ui| {
                                         if let Some(p) = &p {
                                             let (r, _) = ui.allocate_exact_size(vec2(44.0, 16.0), egui::Sense::hover());

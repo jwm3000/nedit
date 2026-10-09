@@ -295,9 +295,10 @@ impl App {
                 (ic::GRADUATION, tr!("Über nEdit" | "About nEdit").into(), Cmd::About),
                 (ic::BOOKMARK, tr!("Hilfe & Tastenkürzel" | "Help & shortcuts").into(), Cmd::Help),
                 (ic::MAGIC, tr!("Theme: Omarchy folgen" | "Theme: follow Omarchy").into(), Cmd::Theme(None)),
+                (ic::MOON, "Theme: nEdit Ink".into(), Cmd::Theme(Some("nedit".into()))),
             ];
             if !q.is_empty() {
-                for (name, _) in crate::theme::list_themes() {
+                for name in crate::theme::all_theme_names() {
                     cmds.push((ic::BRUSH, format!("Theme: {}", crate::theme::pretty_name(&name)), Cmd::Theme(Some(name))));
                 }
             }
