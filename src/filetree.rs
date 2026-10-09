@@ -648,7 +648,7 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
     }
     let dirty = app.buffer_idx(&n.rel).is_some_and(|i| app.buffers[i].dirty());
     let maxc = ((rect.max.x - x - 62.0) / 7.0).max(4.0) as usize;
-    let gs = if n.is_dir { None } else { app.git.file_status(&n.rel) };
+    let gs = if n.is_dir { None } else { app.git_letter(&n.rel) };
     let name_col = match gs {
         Some(c) => mix(widgets::git_color(c, pal), pal.text, 0.25),
         None if is_active => pal.bright,
@@ -658,7 +658,7 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
     let hovering_dir = n.is_dir && resp.hovered();
     if let Some(c) = gs {
         p.text(pos2(rect.max.x - 12.0, cy), Align2::CENTER_CENTER, c.to_string(), widgets::mono_font(11.5), widgets::git_color(c, pal));
-    } else if n.is_dir && !hovering_dir && app.git.dir_has_changes(&n.rel) {
+    } else if n.is_dir && !hovering_dir && (app.git.dir_has_changes(&n.rel) || (app.git.is_repo && app.buffers.iter().any(|b| b.dirty() && b.rel.starts_with(&format!("{}/", n.rel))))) {
         p.circle_filled(pos2(rect.max.x - 12.0, cy), 3.0, with_alpha(widgets::git_color('M', pal), 200));
     }
     if dirty {

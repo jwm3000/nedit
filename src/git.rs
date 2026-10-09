@@ -84,6 +84,7 @@ pub struct GitState {
     pub excluded: std::collections::HashSet<String>,
     marks: std::collections::HashMap<String, (u64, String, Vec<LineMark>)>,
     rx: Option<Receiver<Result<String, String>>>,
+    status_rx: Option<Receiver<StatusSnapshot>>,
 }
 
 impl Default for GitState {
@@ -109,6 +110,7 @@ impl Default for GitState {
             excluded: Default::default(),
             marks: Default::default(),
             rx: None,
+            status_rx: None,
         }
     }
 }
@@ -148,42 +150,65 @@ impl GitState {
     /// Cheap refresh used in the background: repository state and changed files.
     pub fn refresh_status(&mut self, root: &Path, now: f64) {
         self.last_refresh = now;
-        if crate::platform::cmd("git").arg("--version").output().is_err() {
-            self.git_available = false;
+        let snap = status_snapshot(root);
+        self.apply(snap);
+    }
+
+    /// Background status refresh (does not block the UI); results arrive via `poll_status`.
+    pub fn request_status(&mut self, root: &Path, now: f64, ctx: &egui::Context) {
+        if self.status_rx.is_some() {
             return;
         }
-        let canon = root.canonicalize().unwrap_or(root.to_path_buf());
-        self.is_repo = repo_root(root).is_some_and(|r| r.canonicalize().unwrap_or(r) == canon);
-        if !self.is_repo {
+        self.last_refresh = now;
+        let (tx, rx) = channel();
+        let root = root.to_path_buf();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(status_snapshot(&root));
+            ctx.request_repaint();
+        });
+        self.status_rx = Some(rx);
+    }
+
+    /// Apply a finished background refresh. Returns true if something changed.
+    pub fn poll_status(&mut self) -> bool {
+        let Some(rx) = &self.status_rx else { return false };
+        match rx.try_recv() {
+            Ok(snap) => {
+                self.status_rx = None;
+                let before: Vec<(String, String)> = self.changes.iter().map(|c| (c.code.clone(), c.path.clone())).collect();
+                let head_before = self.head.clone();
+                self.apply(snap);
+                let after: Vec<(String, String)> = self.changes.iter().map(|c| (c.code.clone(), c.path.clone())).collect();
+                before != after || head_before != self.head
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.status_rx = None;
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Ask for a refresh as soon as possible (e.g. after saving or creating files).
+    pub fn invalidate(&mut self) {
+        self.last_refresh = -100.0;
+    }
+
+    fn apply(&mut self, s: StatusSnapshot) {
+        self.git_available = s.git_available;
+        self.is_repo = s.is_repo;
+        if !s.is_repo {
             self.changes.clear();
             self.log.clear();
             return;
         }
-        self.branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_else(|_| "main".into());
-        self.remote = git(root, &["remote"]).ok().and_then(|s| s.lines().next().map(String::from));
-        let (mut ahead, mut behind) = (0, 0);
-        if let Ok(s) = git(root, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]) {
-            let v: Vec<usize> = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-            if v.len() == 2 {
-                behind = v[0];
-                ahead = v[1];
-            }
-        }
-        self.ahead = ahead;
-        self.behind = behind;
-        self.changes = git(root, &["status", "--porcelain=v1", "-uall"])
-            .map(|s| {
-                s.lines()
-                    .filter(|l| l.len() > 3)
-                    .map(|l| {
-                        let path = l[3..].trim().trim_matches('"').to_string();
-                        let path = path.rsplit(" -> ").next().unwrap_or(&path).to_string();
-                        Change { code: l[..2].to_string(), path }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.head = git(root, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
+        self.branch = s.branch;
+        self.remote = s.remote;
+        self.ahead = s.ahead;
+        self.behind = s.behind;
+        self.changes = s.changes;
+        self.head = s.head;
         let paths: Vec<String> = self.changes.iter().map(|c| c.path.clone()).collect();
         self.excluded.retain(|p| paths.contains(p));
     }
@@ -349,6 +374,54 @@ impl GitState {
             git(root, &["checkout", "HEAD", "--", path]).map(|_| ())
         }
     }
+}
+
+pub struct StatusSnapshot {
+    git_available: bool,
+    is_repo: bool,
+    branch: String,
+    remote: Option<String>,
+    ahead: usize,
+    behind: usize,
+    changes: Vec<Change>,
+    head: String,
+}
+
+/// Collect repository state (runs on a worker thread for background refreshes).
+fn status_snapshot(root: &Path) -> StatusSnapshot {
+    let mut s = StatusSnapshot { git_available: true, is_repo: false, branch: String::new(), remote: None, ahead: 0, behind: 0, changes: vec![], head: String::new() };
+    if crate::platform::cmd("git").arg("--version").output().is_err() {
+        s.git_available = false;
+        return s;
+    }
+    let canon = root.canonicalize().unwrap_or(root.to_path_buf());
+    s.is_repo = repo_root(root).is_some_and(|r| r.canonicalize().unwrap_or(r) == canon);
+    if !s.is_repo {
+        return s;
+    }
+    s.branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|x| x.trim().to_string()).unwrap_or_else(|_| "main".into());
+    s.remote = git(root, &["remote"]).ok().and_then(|x| x.lines().next().map(String::from));
+    if let Ok(x) = git(root, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]) {
+        let v: Vec<usize> = x.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+        if v.len() == 2 {
+            s.behind = v[0];
+            s.ahead = v[1];
+        }
+    }
+    s.changes = git(root, &["status", "--porcelain=v1", "-uall"])
+        .map(|x| {
+            x.lines()
+                .filter(|l| l.len() > 3)
+                .map(|l| {
+                    let path = l[3..].trim().trim_matches('"').to_string();
+                    let path = path.rsplit(" -> ").next().unwrap_or(&path).to_string();
+                    Change { code: l[..2].to_string(), path }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    s.head = git(root, &["rev-parse", "HEAD"]).map(|x| x.trim().to_string()).unwrap_or_default();
+    s
 }
 
 fn parse_diff(text: &str) -> Vec<(DiffKind, String)> {

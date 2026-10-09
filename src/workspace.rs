@@ -310,7 +310,7 @@ fn editor_area(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         }
         let (icon, col) = crate::filetree::file_icon(&full, pal);
         p.text(pos2(r.min.x + 16.0, r.center().y), Align2::CENTER_CENTER, icon, widgets::ui_font(11.5), if is_active { col } else { pal.dim });
-        let gs = app.git.file_status(rel);
+        let gs = app.git_letter(rel);
         let name_col = match gs {
             Some(c) => mix(widgets::git_color(c, pal), if is_active { pal.bright } else { pal.subtext }, 0.35),
             None if is_active => pal.bright,
@@ -1345,7 +1345,7 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
                     let collapsed = app.doc_collapsed.contains(f);
                     let p = ui.painter();
                     p.line_segment([pos2(dr.min.x, dr.center().y), pos2(dr.max.x, dr.center().y)], Stroke::new(1.0, with_alpha(pal.border, if dresp.hovered() { 200 } else { 90 })));
-                    let label = match app.git.file_status(f) {
+                    let label = match app.git_letter(f) {
                         Some(c) => format!("{}  {f}  · {c}", if collapsed { ic::CHEVRON_RIGHT } else { ic::CHEVRON_DOWN }),
                         None => format!("{}  {f}", if collapsed { ic::CHEVRON_RIGHT } else { ic::CHEVRON_DOWN }),
                     };

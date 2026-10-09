@@ -372,8 +372,18 @@ impl App {
 
     pub fn refresh_tree(&mut self) {
         self.tree = project::file_tree(&self.project.root);
-        self.flat.clear();
+        let old = std::mem::take(&mut self.flat);
         project::flat_files(&self.tree, &mut self.flat);
+        if old != self.flat {
+            self.git.invalidate();
+        }
+    }
+
+    /// Git status letter for display; open files with unsaved edits show "M" right away.
+    pub fn git_letter(&self, rel: &str) -> Option<char> {
+        self.git.file_status(rel).or_else(|| {
+            (self.git.is_repo && self.buffer_idx(rel).is_some_and(|i| self.buffers[i].dirty())).then_some('M')
+        })
     }
 
     pub fn ws(&self, t: Tab) -> &Workspace {
@@ -467,6 +477,9 @@ impl App {
         }
         if bib_saved {
             self.shelf.reload();
+        }
+        if any {
+            self.git.invalidate();
         }
         any
     }
@@ -706,13 +719,14 @@ impl App {
             let root = self.project.root.clone();
             self.git.refresh(&root, now);
         }
-        if now - self.git.last_refresh > 3.0 && !self.git.busy && self.git.git_available {
+        // git status: in the background every second, immediately after file changes
+        if self.git.poll_status() && self.side == SideMode::Git {
             let root = self.project.root.clone();
-            if self.side == SideMode::Git {
-                self.git.refresh(&root, now);
-            } else {
-                self.git.refresh_status(&root, now);
-            }
+            self.git.refresh_log(&root);
+        }
+        if now - self.git.last_refresh > 1.0 && !self.git.busy && self.git.git_available {
+            let root = self.project.root.clone();
+            self.git.request_status(&root, now, ctx);
         }
         if now - self.last_poll > 1.0 {
             self.last_poll = now;
