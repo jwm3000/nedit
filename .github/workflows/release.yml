@@ -15,9 +15,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, name: nedit-linux-x86_64, bin: nedit, archive: tar.gz }
-          - { os: windows-latest, name: nedit-windows-x86_64, bin: nedit.exe, archive: zip }
-          - { os: macos-latest, name: nedit-macos-arm64, bin: nedit, archive: tar.gz }
+          - { os: ubuntu-latest, name: nedit-linux-x86_64, bin: nedit, archive: tar.gz, raw: nedit-linux-x86_64 }
+          - { os: windows-latest, name: nedit-windows-x86_64, bin: nedit.exe, archive: zip, raw: nedit-windows-x86_64.exe }
+          - { os: macos-latest, name: nedit-macos-arm64, bin: nedit, archive: tar.gz, raw: nedit-macos-arm64 }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -33,6 +33,10 @@ jobs:
           cp -r assets dist/${{ matrix.name }}/
           cd dist
           if [ "${{ matrix.archive }}" = "zip" ]; then 7z a ${{ matrix.name }}.zip ${{ matrix.name }}; else tar czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}; fi
+          # plain binary for nEdit's built-in updater
+          cp ../target/release/${{ matrix.bin }} ${{ matrix.raw }}
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.name }}.${{ matrix.archive }}
+          files: |
+            dist/${{ matrix.name }}.${{ matrix.archive }}
+            dist/${{ matrix.raw }}

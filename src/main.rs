@@ -15,11 +15,31 @@ mod project;
 mod shelf;
 mod shelf_ui;
 mod theme;
+mod updater;
 mod visual;
 mod widgets;
 mod workspace;
 
 fn main() -> eframe::Result {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("nEdit {}", updater::VERSION);
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--update") {
+        match updater::cli_update() {
+            Ok(m) => println!("{m}"),
+            Err(e) => {
+                eprintln!("Fehler: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("nEdit {} – LaTeX Studio\n\n  nedit            App starten\n  nedit --update   auf das neueste Release aktualisieren\n  nedit --version  Version anzeigen", updater::VERSION);
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("nEdit")

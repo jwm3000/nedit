@@ -27,11 +27,12 @@ pub struct Settings {
     pub stage_frac: f32,
     pub visual: bool,
     pub doc_width: f32,
+    pub update_check: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0 }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true }
     }
 }
 
@@ -147,6 +148,7 @@ pub enum Dialog {
     NewProject { name: String },
     GitRestore { hash: String, path: String },
     GitDiscard { path: String },
+    Update,
 }
 
 pub struct FindState {
@@ -211,6 +213,8 @@ pub struct App {
     pub pdf_win_gen: u32,
     pub git: crate::git::GitState,
     pub tree_ui: crate::filetree::TreeUi,
+    pub updater: crate::updater::Updater,
+    update_started: bool,
 }
 
 impl App {
@@ -275,7 +279,10 @@ impl App {
             pdf_win_gen: 0,
             git: Default::default(),
             tree_ui: Default::default(),
+            updater: Default::default(),
+            update_started: false,
         };
+        crate::updater::cleanup();
         app.apply_style(&cc.egui_ctx);
         app.after_project_open(&cc.egui_ctx);
         app
@@ -672,6 +679,17 @@ impl App {
             }
         }
 
+        if !self.update_started && now > 4.0 && self.settings.update_check && std::env::var_os("NEDIT_SHOT").is_none() {
+            self.update_started = true;
+            self.updater.check(false, ctx);
+        }
+        if let Some(tag) = self.updater.poll() {
+            let a = self.pal.accent;
+            self.toast(ic::DOWNLOAD, format!("nEdit {tag} ist verfügbar – oben rechts aktualisieren"), a, now);
+        }
+        if self.updater.installing || self.updater.checking {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
         if let Some(r) = self.git.poll() {
             match r {
                 Ok(m) => {
@@ -1030,6 +1048,22 @@ impl App {
                                     changed |= ui.selectable_value(&mut self.project.config.slides_engine, e.to_string(), e).changed();
                                 }
                             });
+                            widgets::section_label(ui, "nEdit", pal);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!("Version {}", crate::updater::VERSION)).color(pal.subtext));
+                                if ui.add_enabled(!self.updater.checking, egui::Button::new(format!("{}  Nach Updates suchen", ic::REFRESH))).clicked() {
+                                    self.updater.check(true, &ctx);
+                                }
+                            });
+                            if ui.checkbox(&mut self.settings.update_check, "Beim Start nach Updates suchen").changed() {
+                                self.settings.save();
+                            }
+                            if !self.updater.status.is_empty() {
+                                ui.label(egui::RichText::new(&self.updater.status).font(widgets::ui_font(11.5)).color(pal.dim));
+                            }
+                            if self.updater.available.is_some() && ui.button(format!("{}  Update anzeigen", ic::DOWNLOAD)).clicked() {
+                                self.dialog = Some(Dialog::Update);
+                            }
                             widgets::section_label(ui, "Präsentation", pal);
                             ui.horizontal(|ui| {
                                 ui.label("Redezeit");
@@ -1074,6 +1108,18 @@ impl App {
                                 }
                             });
                         });
+                        if self.updater.installed {
+                            if widgets::button(ui, ic::REFRESH, "Neu starten", pal, BtnKind::Primary).on_hover_text("Update installiert – nEdit neu starten").clicked() {
+                                self.save_all();
+                                crate::updater::restart();
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        } else if let Some(rel) = &self.updater.available {
+                            let label = format!("Update {}", rel.tag);
+                            if widgets::button(ui, ic::DOWNLOAD, &label, pal, BtnKind::Secondary).on_hover_text("Neue nEdit-Version verfügbar").clicked() {
+                                self.dialog = Some(Dialog::Update);
+                            }
+                        }
                         ui.add_space(6.0);
                         if self.tab != Tab::Shelf {
                             let t = self.tab;
@@ -1239,6 +1285,73 @@ impl App {
                             close = true;
                         }
                     });
+                }
+                Dialog::Update => {
+                    let up = &mut self.updater;
+                    let tag = up.available.as_ref().map(|r| r.tag.clone()).unwrap_or_default();
+                    ui.set_width(460.0);
+                    ui.label(egui::RichText::new(format!("Update auf {tag}")).font(widgets::display_font(22.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(format!("Installiert: {}", crate::updater::VERSION)).color(pal.dim));
+                    ui.add_space(8.0);
+                    if let Some(rel) = &up.available {
+                        if !rel.notes.trim().is_empty() {
+                            egui::Frame::new().fill(pal.base).corner_radius(8).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                                    ui.label(egui::RichText::new(rel.notes.replace("**", "").replace("## ", "").replace("### ", "")).font(widgets::ui_font(12.5)).color(pal.text));
+                                });
+                            });
+                            ui.add_space(8.0);
+                        }
+                    }
+                    if let Some((done, total)) = up.progress {
+                        let f = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+                        ui.add(egui::ProgressBar::new(f).text(format!("{:.1} / {:.1} MB", done as f32 / 1e6, total as f32 / 1e6)));
+                        ui.add_space(6.0);
+                    }
+                    if !up.status.is_empty() {
+                        ui.label(egui::RichText::new(&up.status).font(widgets::ui_font(12.0)).color(pal.subtext));
+                        ui.add_space(6.0);
+                    }
+                    if let Some(src) = crate::updater::source_checkout() {
+                        ui.label(egui::RichText::new("nEdit läuft aus einem Quellcode-Checkout. Aktualisieren mit:").color(pal.subtext));
+                        let cmd = format!("cd {} && git pull && ./install.sh", src.display());
+                        ui.label(egui::RichText::new(&cmd).font(widgets::mono_font(12.0)).color(pal.accent));
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if widgets::button(ui, ic::COPY, "Befehl kopieren", pal, BtnKind::Primary).clicked() {
+                                ui.ctx().copy_text(cmd.clone());
+                            }
+                            if widgets::button(ui, "", "Schließen", pal, BtnKind::Ghost).clicked() {
+                                close = true;
+                            }
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            if up.installed {
+                                if widgets::button(ui, ic::REFRESH, "Jetzt neu starten", pal, BtnKind::Primary).clicked() {
+                                    action = Some(Box::new(|app: &mut App| {
+                                        app.save_all();
+                                    }));
+                                    crate::updater::restart();
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                            } else if up.installing {
+                                let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                                widgets::draw_spinner(ui, r.center(), 7.0, pal.accent);
+                            } else if widgets::button(ui, ic::DOWNLOAD, "Jetzt aktualisieren", pal, BtnKind::Primary).clicked() {
+                                up.install(ctx);
+                            }
+                            if let Some(rel) = &up.available {
+                                if widgets::button(ui, ic::GLOBE, "Auf GitHub", pal, BtnKind::Ghost).clicked() {
+                                    ui.ctx().open_url(egui::OpenUrl::new_tab(rel.html_url.clone()));
+                                }
+                            }
+                            if !up.installing && widgets::button(ui, "", "Später", pal, BtnKind::Ghost).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
                 }
                 Dialog::NewProject { name } => {
                     ui.label(egui::RichText::new("Neues Projekt").font(widgets::display_font(20.0)).color(pal.bright));

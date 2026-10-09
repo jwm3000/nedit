@@ -25,7 +25,7 @@ Präsentationen im TU-Graz-Design und Git – alles offline, alles in einer App.
 
 - [Was nEdit kann](#was-nedit-kann)
 - [Beispiel: eine (erfundene) Masterarbeit über Bier](#beispiel-eine-erfundene-masterarbeit-über-bier)
-- [Installation](#installation)
+- [Installation](#installation) · [Updates](#3-aktualisieren)
 - [Tastenkürzel](#tastenkürzel)
 - [Projektaufbau](#projektaufbau)
 - [Plattformen & Status](#plattformen--status)
@@ -184,6 +184,20 @@ cargo run --release
 
 Fertige Programme für Linux, Windows und macOS gibt es unter
 [Releases](https://github.com/jwm3000/nedit/releases).
+
+### 3. Aktualisieren
+
+nEdit prüft beim Start (abschaltbar im ⚙-Menü), ob es ein neues Release gibt. Dann
+erscheint oben rechts **„Update vX.Y.Z“** – ein Klick zeigt die Neuerungen, lädt das
+passende Programm von GitHub, tauscht es aus und startet nEdit neu.
+
+```sh
+nedit --update     # dasselbe im Terminal
+nedit --version
+```
+
+Läuft nEdit aus einem geklonten Repository, wird stattdessen
+`git pull && ./install.sh` empfohlen.
 
 Rust-Bibliotheken (werden von Cargo automatisch geladen): `eframe`/`egui` (Oberfläche),
 `rfd` (Dateidialoge), `ureq` (DOI/Crossref), `serde`/`serde_json`/`toml`, `regex`, `image`,
