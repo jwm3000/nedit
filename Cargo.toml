@@ -1,6 +1,6 @@
 [package]
 name = "nedit"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 authors = ["Norbert Winter"]
 description = "nEdit – nativer LaTeX-Editor in Rust: Live-PDF, visueller Modus, Literatur-Bibliothek, Präsentationen (TU-Graz-Beamer), Git"
