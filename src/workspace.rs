@@ -1,5 +1,5 @@
 //! The two document workspaces: "Masterarbeit" (Overleaf-style editor + PDF)
-//! and "Präsentation" (filmstrip, editor, stage, fullscreen presenting).
+//! and tr!("Präsentation" | "Presentation") (filmstrip, editor, stage, fullscreen presenting).
 
 use crate::app::{truncate, App, PresentState, SideMode, Tab};
 use crate::compile::Level;
@@ -27,6 +27,10 @@ pub fn thesis_ui(app: &mut App, ui: &mut Ui, now: f64) {
         .size_range(190.0..=480.0)
         .frame(Frame::new().fill(pal.mantle).inner_margin(Margin { left: 6, right: 10, top: 12, bottom: 8 }))
         .show(ui, |ui| sidebar(app, ui, &pal, Tab::Thesis, now));
+    if !app.settings.show_pdf {
+        egui::CentralPanel::default().frame(Frame::new().fill(pal.base)).show(ui, |ui| editor_area(app, ui, &pal, Tab::Thesis, now));
+        return;
+    }
     let w = ui.available_width();
     let pw = (w * app.settings.pdf_frac).clamp(280.0, (w - 340.0).max(280.0));
     let panel = egui::Panel::right("pdf-thesis")
@@ -70,7 +74,7 @@ pub fn slides_ui(app: &mut App, ui: &mut Ui, now: f64) {
     if !app.project.has_slides() {
         egui::CentralPanel::default().frame(Frame::new().fill(pal.base)).show(ui, |ui| {
             ui.centered_and_justified(|ui| {
-                ui.label(egui::RichText::new(format!("Keine Präsentation gefunden: {}", app.project.config.slides_main)).color(pal.dim));
+                ui.label(egui::RichText::new(trf!("Keine Präsentation gefunden: {}" | "No presentation found: {}", app.project.config.slides_main)).color(pal.dim));
             });
         });
         return;
@@ -125,10 +129,10 @@ fn rail(app: &mut App, ui: &mut Ui, pal: &Palette) {
     ui.vertical_centered(|ui| {
         ui.spacing_mut().item_spacing.y = 8.0;
         for (mode, icon, tip) in [
-            (SideMode::Files, ic::FOLDER, "Dateien"),
-            (SideMode::Outline, ic::LIST, "Gliederung"),
-            (SideMode::Papers, ic::BOOKMARK, "Literatur zitieren"),
-            (SideMode::Git, ic::GIT, "Git – Versionen & Verlauf"),
+            (SideMode::Files, ic::FOLDER, tr!("Dateien" | "Files")),
+            (SideMode::Outline, ic::LIST, tr!("Gliederung" | "Outline")),
+            (SideMode::Papers, ic::BOOKMARK, tr!("Literatur zitieren" | "Cite literature")),
+            (SideMode::Git, ic::GIT, tr!("Git – Versionen & Verlauf" | "Git – versions & history")),
         ] {
             let active = app.side == mode;
             let r = widgets::icon_button(ui, icon, tip, pal, active);
@@ -161,7 +165,7 @@ fn header_row(ui: &mut Ui, title: &str, pal: &Palette, add_right: impl FnOnce(&m
 }
 
 fn outline_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
-    header_row(ui, "Gliederung", pal, |_| {});
+    header_row(ui, tr!("Gliederung" | "Outline"), pal, |_| {});
     let items = if t == Tab::Slides { app.slide_outline.clone() } else { app.outline.clone() };
     // current position
     let (cur_file, cur_line) = app
@@ -174,7 +178,7 @@ fn outline_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         if items.is_empty() {
-            ui.label(egui::RichText::new("Noch keine Kapitel.").color(pal.dim));
+            ui.label(egui::RichText::new(tr!("Noch keine Kapitel." | "No chapters yet.")).color(pal.dim));
         }
         for (k, it) in items.iter().enumerate() {
             let h = if it.level <= 1 { 30.0 } else { 25.0 };
@@ -208,17 +212,17 @@ fn outline_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
 }
 
 fn papers_quick(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
-    header_row(ui, "Literatur", pal, |ui| {
-        if widgets::icon_button_sized(ui, ic::EXTERNAL, "Bibliothek öffnen", pal, false, 24.0).clicked() {
+    header_row(ui, tr!("Literatur" | "Literature"), pal, |ui| {
+        if widgets::icon_button_sized(ui, ic::EXTERNAL, tr!("Bibliothek öffnen" | "Open library"), pal, false, 24.0).clicked() {
             app.tab = Tab::Shelf;
         }
     });
     let w = ui.available_width();
     let mut f = std::mem::take(&mut app.shelf_ui.side_filter);
-    widgets::search_field(ui, &mut f, "Filtern …", ic::SEARCH, pal, w, "side-filter");
+    widgets::search_field(ui, &mut f, tr!("Filtern …" | "Filter …"), ic::SEARCH, pal, w, "side-filter");
     app.shelf_ui.side_filter = f;
     ui.add_space(6.0);
-    ui.label(egui::RichText::new("Klick fügt \\citep{…} an der Cursorposition ein.").font(widgets::ui_font(11.0)).color(pal.dim));
+    ui.label(egui::RichText::new(tr!("Klick fügt \\citep{…} an der Cursorposition ein." | "Click inserts \\citep{…} at the cursor.")).font(widgets::ui_font(11.0)).color(pal.dim));
     ui.add_space(4.0);
     let q = app.shelf_ui.side_filter.to_lowercase();
     let papers: Vec<(String, String, String, Color32)> = app
@@ -360,7 +364,7 @@ fn editor_area(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
 fn editor_body(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let Some(rel) = app.ws(t).active.clone() else {
         ui.centered_and_justified(|ui| {
-            ui.label(egui::RichText::new("Wähle links eine Datei aus.").color(pal.dim));
+            ui.label(egui::RichText::new(tr!("Wähle links eine Datei aus." | "Choose a file on the left.")).color(pal.dim));
         });
         return;
     };
@@ -411,7 +415,7 @@ fn apply_vim(app: &mut App, ctx: &egui::Context, vo: crate::vim::VimOut, t: Tab,
         app.save_all();
         app.compile(t, ctx);
         let g = app.pal.green;
-        app.toast(ic::SAVE, format!("{rel} gespeichert"), g, now);
+        app.toast(ic::SAVE, trf!("{rel} gespeichert" | "{rel} saved"), g, now);
     }
     if vo.close {
         app.close_tab(rel, t);
@@ -437,13 +441,13 @@ fn view_switch_ordered(app: &mut App, ui: &mut Ui, pal: &Palette, ctx: &egui::Co
     for it in items {
         match it {
             0 => {
-                if widgets::chip(ui, ic::CODE, l("Code"), !vis, pal.accent, pal).on_hover_text("Code: LaTeX-Quelltext (Strg+E)").clicked() && vis {
+                if widgets::chip(ui, ic::CODE, l("Code"), !vis, pal.accent, pal).on_hover_text(tr!("Code: LaTeX-Quelltext (Strg+E)" | "Code: LaTeX source (Ctrl+E)")).clicked() && vis {
                     app.settings.visual = false;
                     app.settings.save();
                 }
             }
             1 => {
-                if widgets::chip(ui, ic::EYE, l("Visuell"), vis, pal.accent, pal).on_hover_text("Visuell: LaTeX-Befehle ausblenden (Strg+E)").clicked() && !vis {
+                if widgets::chip(ui, ic::EYE, l(tr!("Visuell" | "Visual")), vis, pal.accent, pal).on_hover_text(tr!("Visuell: LaTeX-Befehle ausblenden (Strg+E)" | "Visual: hide LaTeX commands (Ctrl+E)")).clicked() && !vis {
                     app.settings.visual = true;
                     app.settings.save();
                 }
@@ -453,7 +457,7 @@ fn view_switch_ordered(app: &mut App, ui: &mut Ui, pal: &Palette, ctx: &egui::Co
                 ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
             }
             _ => {
-                if widgets::chip(ui, ic::BOOK, l("Dokument"), dm, pal.accent, pal).on_hover_text("Dokument: alle Kapitel zusammenhängend (Strg+Umschalt+D)").clicked() {
+                if widgets::chip(ui, ic::BOOK, l(tr!("Dokument" | "Document")), dm, pal.accent, pal).on_hover_text(tr!("Dokument: alle Kapitel zusammenhängend (Strg+Umschalt+D)" | "Document: all chapters in one view (Ctrl+Shift+D)")).clicked() {
                     app.set_doc_mode(!dm, ctx);
                 }
             }
@@ -472,19 +476,26 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     right.spacing_mut().item_spacing.x = 2.0;
     if t == Tab::Thesis {
         let f = app.focus;
-        if widgets::icon_button_sized(&mut right, ic::EXPAND, "Vollbild – nur der Text (F11)", pal, f, 28.0).clicked() {
+        if widgets::icon_button_sized(&mut right, ic::EXPAND, tr!("Vollbild – nur der Text (F11)" | "Full screen – just the text (F11)"), pal, f, 28.0).clicked() {
             app.set_focus(!f, &ctx);
         }
+        if !app.doc_mode {
+            let on = app.settings.show_pdf;
+            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("PDF-Vorschau ein/aus" | "Toggle PDF preview"), pal, on, 28.0).clicked() {
+                app.settings.show_pdf = !on;
+                app.settings.save();
+            }
+        }
         if app.doc_mode {
-            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, "PDF-Vorschau ein/aus", pal, app.doc_pdf, 28.0).clicked() {
+            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("PDF-Vorschau ein/aus" | "Toggle PDF preview"), pal, app.doc_pdf, 28.0).clicked() {
                 app.doc_pdf = !app.doc_pdf;
             }
-            if widgets::icon_button_sized(&mut right, ic::LIST, "Inhaltsverzeichnis ein/aus", pal, app.doc_toc, 28.0).clicked() {
+            if widgets::icon_button_sized(&mut right, ic::LIST, tr!("Inhaltsverzeichnis ein/aus" | "Toggle table of contents"), pal, app.doc_toc, 28.0).clicked() {
                 app.doc_toc = !app.doc_toc;
             }
         }
     }
-    if widgets::icon_button_sized(&mut right, ic::SEARCH, "Suchen & Ersetzen (Strg+F)", pal, app.find.open, 28.0).clicked() {
+    if widgets::icon_button_sized(&mut right, ic::SEARCH, tr!("Suchen & Ersetzen (Strg+F)" | "Find & replace (Ctrl+F)"), pal, app.find.open, 28.0).clicked() {
         app.find.open = !app.find.open;
         app.find.focus = app.find.open;
     }
@@ -504,18 +515,18 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
             let r = child.allocate_exact_size(vec2(10.0, 20.0), Sense::hover()).0;
             child.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
         }
-        if widgets::icon_button_sized(&mut child, icon, tip, pal, false, 28.0).clicked() {
+        if widgets::icon_button_sized(&mut child, icon, crate::i18n::t(tip), pal, false, 28.0).clicked() {
             app.insert_snippet(t, snip);
         }
     }
     // cite picker
     let r = child.allocate_exact_size(vec2(10.0, 20.0), Sense::hover()).0;
     child.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
-    let resp = widgets::icon_button_sized(&mut child, ic::QUOTE, "Zitieren", pal, false, 28.0);
+    let resp = widgets::icon_button_sized(&mut child, ic::QUOTE, tr!("Zitieren" | "Cite"), pal, false, 28.0);
     let mut insert: Option<String> = None;
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(320.0);
-        widgets::section_label(ui, "Zitieren aus der Bibliothek", pal);
+        widgets::section_label(ui, tr!("Zitieren aus der Bibliothek" | "Cite from the library"), pal);
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for p in &app.shelf.papers {
                 let label = format!("{} {}  ·  {}", p.entry.authors_short(), p.entry.year(), truncate(&p.entry.title(), 40));
@@ -524,14 +535,14 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
                 }
             }
             if app.shelf.papers.is_empty() {
-                ui.label(egui::RichText::new("Die Bibliothek ist leer.").color(pal.dim));
+                ui.label(egui::RichText::new(tr!("Die Bibliothek ist leer." | "The library is empty.")).color(pal.dim));
             }
         });
     });
     if let Some(s) = insert {
         app.insert_snippet(t, &s);
     }
-    let resp = widgets::icon_button_sized(&mut child, ic::LINK, "Querverweis", pal, false, 28.0);
+    let resp = widgets::icon_button_sized(&mut child, ic::LINK, tr!("Querverweis" | "Cross-reference"), pal, false, 28.0);
     let mut insert: Option<String> = None;
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(260.0);
@@ -559,7 +570,7 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let shift = child.input(|i| i.modifiers.shift);
     let esc = child.input(|i| i.key_pressed(egui::Key::Escape));
     let mut q = std::mem::take(&mut app.find.query);
-    let r = widgets::search_field(&mut child, &mut q, "Suchen", ic::SEARCH, pal, 220.0, "find-q");
+    let r = widgets::search_field(&mut child, &mut q, tr!("Suchen" | "Find"), ic::SEARCH, pal, 220.0, "find-q");
     if app.find.focus {
         r.request_focus();
         app.find.focus = false;
@@ -569,7 +580,7 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let q_lost_enter = r.lost_focus() && enter;
     app.find.query = q;
     let mut rep = std::mem::take(&mut app.find.replace);
-    widgets::search_field(&mut child, &mut rep, "Ersetzen", ic::PENCIL, pal, 180.0, "find-r");
+    widgets::search_field(&mut child, &mut rep, tr!("Ersetzen" | "Replace"), ic::PENCIL, pal, 180.0, "find-r");
     app.find.replace = rep;
 
     let query = app.find.query.clone();
@@ -578,12 +589,12 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let matches = editor::find_matches(&b.text, &query);
     let cur = b.cursor.min(b.sel_end);
     let idx = matches.iter().position(|m| m.0 == cur && m.1 == b.cursor.max(b.sel_end));
-    child.label(egui::RichText::new(if query.is_empty() { String::new() } else if matches.is_empty() { "Keine Treffer".into() } else { format!("{} / {}", idx.map(|i| i + 1).unwrap_or(0), matches.len()) }).font(widgets::ui_font(12.0)).color(pal.dim));
+    child.label(egui::RichText::new(if query.is_empty() { String::new() } else if matches.is_empty() { tr!("Keine Treffer" | "No results").into() } else { format!("{} / {}", idx.map(|i| i + 1).unwrap_or(0), matches.len()) }).font(widgets::ui_font(12.0)).color(pal.dim));
     let mut go: Option<bool> = None;
-    if widgets::icon_button_sized(&mut child, "\u{f077}", "Vorheriger", pal, false, 26.0).clicked() {
+    if widgets::icon_button_sized(&mut child, "\u{f077}", tr!("Vorheriger" | "Previous"), pal, false, 26.0).clicked() {
         go = Some(false);
     }
-    if widgets::icon_button_sized(&mut child, ic::CHEVRON_DOWN, "Nächster", pal, false, 26.0).clicked() {
+    if widgets::icon_button_sized(&mut child, ic::CHEVRON_DOWN, tr!("Nächster" | "Next"), pal, false, 26.0).clicked() {
         go = Some(true);
     }
     if q_changed && !matches.is_empty() {
@@ -606,7 +617,7 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
             b.request_focus = false;
         }
     }
-    if widgets::button(&mut child, "", "Ersetzen", pal, BtnKind::Secondary).clicked() {
+    if widgets::button(&mut child, "", tr!("Ersetzen" | "Replace"), pal, BtnKind::Secondary).clicked() {
         if let Some(i) = idx {
             let (a, z) = matches[i];
             let ba = editor::char_to_byte(&b.text, a);
@@ -619,7 +630,7 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
             b.select(m.0, m.1);
         }
     }
-    if widgets::button(&mut child, "", "Alle", pal, BtnKind::Secondary).clicked() && !matches.is_empty() {
+    if widgets::button(&mut child, "", tr!("Alle" | "All"), pal, BtnKind::Secondary).clicked() && !matches.is_empty() {
         for (a, z) in matches.iter().rev() {
             let ba = editor::char_to_byte(&b.text, *a);
             let bz = editor::char_to_byte(&b.text, *z);
@@ -628,7 +639,7 @@ fn find_bar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         b.last_edit = 0.0;
     }
     child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if widgets::icon_button_sized(ui, ic::TIMES, "Schließen (Esc)", pal, false, 26.0).clicked() {
+        if widgets::icon_button_sized(ui, ic::TIMES, tr!("Schließen (Esc)" | "Close (Esc)"), pal, false, 26.0).clicked() {
             app.find.open = false;
         }
     });
@@ -649,7 +660,7 @@ fn pdf_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let ws = app.ws_mut(t);
     let (e, w) = (ws.errors(), ws.warnings());
     // logs toggle with badges
-    let tip = if ws.show_logs { "Zurück zum PDF" } else { "Protokoll anzeigen" };
+    let tip = if ws.show_logs { tr!("Zurück zum PDF" | "Back to PDF") } else { tr!("Protokoll anzeigen" | "Show log") };
     let icon = if ws.show_logs { ic::FILE_PDF } else { ic::TERMINAL };
     if widgets::icon_button_sized(&mut c, icon, tip, pal, ws.show_logs, 28.0).clicked() {
         ws.show_logs = !ws.show_logs;
@@ -663,26 +674,26 @@ fn pdf_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let n = ws.viewer.page_count();
     c.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if widgets::icon_button_sized(ui, ic::EXTERNAL, "In externem Viewer öffnen", pal, false, 28.0).clicked() {
+        if widgets::icon_button_sized(ui, ic::EXTERNAL, tr!("In externem Viewer öffnen" | "Open in external viewer"), pal, false, 28.0).clicked() {
             if let Some(d) = &ws.viewer.doc {
                 crate::platform::open_external(&d.path);
             }
         }
         if t == Tab::Thesis {
-            if widgets::icon_button_sized(ui, ic::EXPAND, "Seite einpassen", pal, ws.viewer.zoom == Zoom::FitPage, 28.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::EXPAND, tr!("Seite einpassen" | "Fit page"), pal, ws.viewer.zoom == Zoom::FitPage, 28.0).clicked() {
                 ws.viewer.zoom = Zoom::FitPage;
             }
-            if widgets::icon_button_sized(ui, ic::COLUMNS, "Breite einpassen", pal, ws.viewer.zoom == Zoom::FitWidth, 28.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::COLUMNS, tr!("Breite einpassen" | "Fit width"), pal, ws.viewer.zoom == Zoom::FitWidth, 28.0).clicked() {
                 ws.viewer.zoom = Zoom::FitWidth;
             }
-            if widgets::icon_button_sized(ui, ic::ZOOM_IN, "Vergrößern", pal, false, 28.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::ZOOM_IN, tr!("Vergrößern" | "Zoom in"), pal, false, 28.0).clicked() {
                 ws.viewer.zoom_by(1.15);
             }
             if !narrow {
                 let pct = format!("{:.0} %", ws.viewer.scale() * 100.0);
                 ui.label(egui::RichText::new(pct).font(widgets::ui_font(12.0)).color(pal.subtext));
             }
-            if widgets::icon_button_sized(ui, ic::ZOOM_OUT, "Verkleinern", pal, false, 28.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::ZOOM_OUT, tr!("Verkleinern" | "Zoom out"), pal, false, 28.0).clicked() {
                 ws.viewer.zoom_by(1.0 / 1.15);
             }
             ui.add_space(8.0);
@@ -703,7 +714,7 @@ fn pdf_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         let r = ui.available_rect_before_wrap();
         if app.ws(t).job.is_some() {
             widgets::draw_spinner(ui, r.center() - vec2(0.0, 20.0), 14.0, pal.accent);
-            ui.painter().text(r.center() + vec2(0.0, 16.0), Align2::CENTER_CENTER, "Erstes Kompilieren …", widgets::ui_font(13.0), pal.subtext);
+            ui.painter().text(r.center() + vec2(0.0, 16.0), Align2::CENTER_CENTER, tr!("Erstes Kompilieren …" | "First compile …"), widgets::ui_font(13.0), pal.subtext);
         }
     }
     let renderer = app.renderer.clone();
@@ -720,7 +731,7 @@ fn pdf_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         p.rect_filled(pill, 15.0, pal.surface);
         p.rect_stroke(pill, 15.0, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         widgets::draw_spinner(ui, pos2(pill.min.x + 20.0, pill.center().y), 6.0, pal.accent);
-        ui.painter().text(pos2(pill.min.x + 36.0, pill.center().y), Align2::LEFT_CENTER, "Kompiliert …", widgets::ui_font(12.5), pal.text);
+        ui.painter().text(pos2(pill.min.x + 36.0, pill.center().y), Align2::LEFT_CENTER, tr!("Kompiliert …" | "Compiling …"), widgets::ui_font(12.5), pal.text);
     }
     let _ = now;
 }
@@ -730,9 +741,9 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     let ws = app.ws_mut(t);
     Frame::new().inner_margin(Margin::same(14)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Protokoll").font(widgets::display_font(19.0)).color(pal.bright));
+            ui.label(egui::RichText::new(tr!("Protokoll" | "Log")).font(widgets::display_font(19.0)).color(pal.bright));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::chip(ui, ic::TERMINAL, "Rohes Log", ws.show_raw, pal.accent, pal).clicked() {
+                if widgets::chip(ui, ic::TERMINAL, tr!("Rohes Log" | "Raw log"), ws.show_raw, pal.accent, pal).clicked() {
                     ws.show_raw = !ws.show_raw;
                 }
             });
@@ -749,16 +760,16 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new(ic::CHECK_CIRCLE).font(widgets::ui_font(34.0)).color(pal.green));
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(if ws.compiled_once { "Keine Fehler oder Warnungen" } else { "Noch nicht kompiliert" }).color(pal.subtext));
+                ui.label(egui::RichText::new(if ws.compiled_once { tr!("Keine Fehler oder Warnungen" | "No errors or warnings") } else { tr!("Noch nicht kompiliert" | "Not compiled yet") }).color(pal.subtext));
             });
             return;
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for is in &ws.issues {
                 let (col, label) = match is.level {
-                    Level::Error => (pal.red, "Fehler"),
-                    Level::Warning => (pal.yellow, "Warnung"),
-                    Level::BadBox => (pal.dim, "Satz"),
+                    Level::Error => (pal.red, tr!("Fehler" | "Error")),
+                    Level::Warning => (pal.yellow, tr!("Warnung" | "Warning")),
+                    Level::BadBox => (pal.dim, tr!("Satz" | "Typesetting")),
                 };
                 let resp = Frame::new()
                     .fill(mix(pal.surface, col, 0.06))
@@ -804,12 +815,12 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
 // ───────────────────────────── slides ─────────────────────────────
 
 fn filmstrip(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64) {
-    header_row(ui, "Folien", pal, |ui| {
+    header_row(ui, tr!("Folien" | "Slides"), pal, |ui| {
         let n = app.slides.viewer.page_count();
         ui.label(egui::RichText::new(n.to_string()).font(widgets::ui_font(11.0)).color(pal.dim));
     });
     let Some(doc) = app.slides.viewer.doc.clone() else {
-        ui.label(egui::RichText::new("Wird kompiliert …").color(pal.dim));
+        ui.label(egui::RichText::new(tr!("Wird kompiliert …" | "Compiling …")).color(pal.dim));
         return;
     };
     let renderer = app.renderer.clone();
@@ -885,7 +896,7 @@ fn stage(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64) {
     let mut nav = ui.new_child(egui::UiBuilder::new().max_rect(nav_rect.shrink2(vec2(16.0, 12.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let n = app.slides.viewer.page_count();
     let cur = app.slides.viewer.current_page;
-    if widgets::icon_button_sized(&mut nav, ic::ARROW_LEFT, "Vorherige Folie", pal, false, 34.0).clicked() {
+    if widgets::icon_button_sized(&mut nav, ic::ARROW_LEFT, tr!("Vorherige Folie" | "Previous slide"), pal, false, 34.0).clicked() {
         app.slides.viewer.prev_page();
     }
     // progress dots / bar
@@ -899,7 +910,7 @@ fn stage(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64) {
         nav.painter().rect_filled(fill, 2.0, pal.accent);
         nav.painter().circle_filled(pos2(fill.max.x, track.center().y), 6.0, pal.accent);
     }
-    if widgets::icon_button_sized(&mut nav, ic::ARROW_RIGHT, "Nächste Folie", pal, false, 34.0).clicked() {
+    if widgets::icon_button_sized(&mut nav, ic::ARROW_RIGHT, tr!("Nächste Folie" | "Next slide"), pal, false, 34.0).clicked() {
         app.slides.viewer.next_page();
     }
     nav.add_space(8.0);
@@ -1031,7 +1042,7 @@ pub fn present_ui(app: &mut App, ui: &mut Ui, now: f64) {
             p.text(pos2(pill.max.x - 76.0, pill.center().y), Align2::CENTER_CENTER, ttxt, widgets::mono_font(15.0), a(col, 1.0));
             p.text(pos2(pill.max.x - 26.0, pill.center().y), Align2::CENTER_CENTER, format!("{:.0}′", (target / 60.0)), widgets::ui_font(12.0), a(Color32::WHITE, 0.5));
             if now - start < 6.0 || !show_hud {
-                let help = "←/→ blättern  ·  B schwarz  ·  P Pause  ·  T Leiste fixieren  ·  Esc beenden";
+                let help = tr!("←/→ blättern  ·  B schwarz  ·  P Pause  ·  T Leiste fixieren  ·  Esc beenden" | "←/→ navigate  ·  B black  ·  P pause  ·  T pin bar  ·  Esc exit");
                 let hr = Rect::from_center_size(pos2(rect.center().x, pill.min.y - 22.0), vec2(470.0, 26.0));
                 p.rect_filled(hr, 13.0, a(Color32::from_rgb(18, 18, 22), 0.7));
                 p.text(hr.center(), Align2::CENTER_CENTER, help, widgets::ui_font(11.5), a(Color32::WHITE, 0.75));
@@ -1102,7 +1113,7 @@ pub fn focus_ui(app: &mut App, ui: &mut Ui, now: f64) {
                             let r = ui.allocate_exact_size(vec2(8.0, 18.0), Sense::hover()).0;
                             ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
                             let on = app.focus_pdf;
-                            if widgets::chip(ui, ic::FILE_PDF, "PDF", on, pal.accent, &pal).on_hover_text("Schwebende PDF-Vorschau ein/aus").clicked() {
+                            if widgets::chip(ui, ic::FILE_PDF, "PDF", on, pal.accent, &pal).on_hover_text(tr!("Schwebende PDF-Vorschau ein/aus" | "Toggle floating PDF preview")).clicked() {
                                 app.focus_pdf = !on;
                                 app.pdf_win_gen += 1;
                                 if !on {
@@ -1111,7 +1122,7 @@ pub fn focus_ui(app: &mut App, ui: &mut Ui, now: f64) {
                             }
                             let r = ui.allocate_exact_size(vec2(8.0, 18.0), Sense::hover()).0;
                             ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
-                            if widgets::icon_button_sized(ui, ic::COMPRESS, "Vollbild beenden (F11 / Esc)", &pal, false, 28.0).clicked() {
+                            if widgets::icon_button_sized(ui, ic::COMPRESS, tr!("Vollbild beenden (F11 / Esc)" | "Exit full screen (F11 / Esc)"), &pal, false, 28.0).clicked() {
                                 app.set_focus(false, &ctx);
                             }
                         });
@@ -1151,7 +1162,7 @@ fn floating_pdf(app: &mut App, ctx: &egui::Context, pal: &Palette, now: f64) {
     let x = want.min.x.clamp(screen.min.x + 8.0, (screen.max.x - ww - 8.0).max(screen.min.x + 8.0));
     let y = want.min.y.clamp(top, (screen.max.y - h - 8.0).max(top));
     want = Rect::from_min_size(pos2(x, y), vec2(ww, h));
-    let window = egui::Window::new(egui::RichText::new(format!("{}  Vorschau", ic::FILE_PDF)).font(widgets::ui_font(13.0)).color(pal.text))
+    let window = egui::Window::new(egui::RichText::new(trf!("{}  Vorschau" | "{}  Preview", ic::FILE_PDF)).font(widgets::ui_font(13.0)).color(pal.text))
         .id(egui::Id::new(("focus-pdf-window", app.pdf_win_gen)))
         .open(&mut open)
         .collapsible(false)
@@ -1176,20 +1187,20 @@ fn floating_pdf(app: &mut App, ctx: &egui::Context, pal: &Palette, now: f64) {
                 if compiling {
                     let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                     widgets::draw_spinner(ui, r.center(), 5.0, pal.accent);
-                    ui.label(egui::RichText::new("Kompiliert …").font(widgets::ui_font(11.5)).color(pal.dim));
+                    ui.label(egui::RichText::new(tr!("Kompiliert …" | "Compiling …")).font(widgets::ui_font(11.5)).color(pal.dim));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    if widgets::icon_button_sized(ui, ic::COLUMNS, "Breite einpassen", pal, v.zoom == Zoom::FitWidth, 24.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::COLUMNS, tr!("Breite einpassen" | "Fit width"), pal, v.zoom == Zoom::FitWidth, 24.0).clicked() {
                         v.zoom = Zoom::FitWidth;
                     }
-                    if widgets::icon_button_sized(ui, ic::ZOOM_IN, "Vergrößern", pal, false, 24.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::ZOOM_IN, tr!("Vergrößern" | "Zoom in"), pal, false, 24.0).clicked() {
                         v.zoom_by(1.15);
                     }
-                    if widgets::icon_button_sized(ui, ic::ZOOM_OUT, "Verkleinern", pal, false, 24.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::ZOOM_OUT, tr!("Verkleinern" | "Zoom out"), pal, false, 24.0).clicked() {
                         v.zoom_by(1.0 / 1.15);
                     }
-                    if widgets::icon_button_sized(ui, ic::BOLT, "Zur Cursorposition", pal, false, 24.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::BOLT, tr!("Zur Cursorposition" | "Go to cursor position"), pal, false, 24.0).clicked() {
                         double = Some((usize::MAX, 0.0, 0.0));
                     }
                 });
@@ -1251,9 +1262,9 @@ pub fn document_ui(app: &mut App, ui: &mut Ui, now: f64) {
 fn doc_toc(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String]) {
     ui.label(egui::RichText::new(app.project.config.name.clone()).font(widgets::display_font(20.0)).color(pal.bright));
     let words: usize = files.iter().filter_map(|f| app.buffer_idx(f)).map(|i| crate::project::word_count(&app.buffers[i].text)).sum();
-    ui.label(egui::RichText::new(format!("{} Wörter  ·  {} Dateien", crate::app::fmt_thousands(words), files.len())).font(widgets::ui_font(11.5)).color(pal.dim));
+    ui.label(egui::RichText::new(trf!("{} Wörter  ·  {} Dateien" | "{} words  ·  {} files", crate::app::fmt_thousands(words), files.len())).font(widgets::ui_font(11.5)).color(pal.dim));
     ui.add_space(14.0);
-    widgets::section_label(ui, "Inhalt", pal);
+    widgets::section_label(ui, tr!("Inhalt" | "Contents"), pal);
     let items = app.outline.clone();
     let active = app.thesis.active.clone().unwrap_or_default();
     let cur_line = app.buffer_idx(&active).map(|i| app.buffers[i].line).unwrap_or(0);
@@ -1324,7 +1335,7 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
                 new_width = Some((w, false));
                 // live readout: approx. characters per line
                 let chars = (w / (font_size + 3.0) / 0.47).round() as i32;
-                let label = format!("{:.0} px  ·  ≈ {chars} Zeichen/Zeile", w);
+                let label = trf!("{:.0} px  ·  ≈ {chars} Zeichen/Zeile" | "{:.0} px  ·  ≈ {chars} chars/line", w);
                 let pill = Rect::from_center_size(pos2(paper.center().x, clip.min.y + 26.0), vec2(250.0, 28.0));
                 ui.painter().rect_filled(pill, 14.0, pal.surface);
                 ui.painter().rect_stroke(pill, 14.0, Stroke::new(1.0, pal.border), StrokeKind::Inside);
@@ -1336,7 +1347,7 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
             if resp.double_clicked() {
                 new_width = Some((if visual { 780.0 } else { 980.0 }, true));
             }
-            let _ = resp.on_hover_text("Ziehen: Breite ändern · Doppelklick: Standard");
+            let _ = resp.on_hover_text(tr!("Ziehen: Breite ändern · Doppelklick: Standard" | "Drag: change width · double-click: default"));
         }
         for k in 1..=3 {
             let k = k as f32;
@@ -1467,12 +1478,12 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         app.git.refresh(&root, now);
     }
     header_row(ui, "Git", pal, |ui| {
-        if widgets::icon_button_sized(ui, ic::REFRESH, "Aktualisieren", pal, false, 24.0).clicked() {
+        if widgets::icon_button_sized(ui, ic::REFRESH, tr!("Aktualisieren" | "Refresh"), pal, false, 24.0).clicked() {
             app.git.refresh(&root, now);
         }
     });
     if !app.git.git_available {
-        ui.label(egui::RichText::new("git ist nicht installiert.").color(pal.dim));
+        ui.label(egui::RichText::new(tr!("git ist nicht installiert." | "git is not installed.")).color(pal.dim));
         return;
     }
     if !app.git.is_repo {
@@ -1480,10 +1491,10 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new(ic::GIT).font(widgets::ui_font(26.0)).color(pal.accent));
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Noch nicht versioniert").font(widgets::bold_font(14.0)).color(pal.bright));
-            ui.label(egui::RichText::new("Mit Git sicherst du jeden Stand deiner Arbeit und kannst jederzeit zu früheren Versionen zurück.").font(widgets::ui_font(12.0)).color(pal.subtext));
+            ui.label(egui::RichText::new(tr!("Noch nicht versioniert" | "Not versioned yet")).font(widgets::bold_font(14.0)).color(pal.bright));
+            ui.label(egui::RichText::new(tr!("Mit Git sicherst du jeden Stand deiner Arbeit und kannst jederzeit zu früheren Versionen zurück." | "Git saves every state of your work so you can always go back to earlier versions.")).font(widgets::ui_font(12.0)).color(pal.subtext));
             ui.add_space(10.0);
-            if widgets::button(ui, ic::PLUS, "Repository anlegen", pal, BtnKind::Primary).clicked() {
+            if widgets::button(ui, ic::PLUS, tr!("Repository anlegen" | "Create repository"), pal, BtnKind::Primary).clicked() {
                 app.git_init(now);
             }
         });
@@ -1506,10 +1517,10 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
                     let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
                     widgets::draw_spinner(ui, r.center(), 6.0, pal.accent);
                 } else {
-                    if widgets::icon_button_sized(ui, ic::UPLOAD, "Push – hochladen", pal, false, 24.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::UPLOAD, tr!("Push – hochladen" | "Push – upload"), pal, false, 24.0).clicked() {
                         app.git.sync(&root, false, ctx.clone());
                     }
-                    if widgets::icon_button_sized(ui, ic::DOWNLOAD, "Pull – Änderungen holen", pal, false, 24.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::DOWNLOAD, tr!("Pull – Änderungen holen" | "Pull – fetch changes"), pal, false, 24.0).clicked() {
                         app.git.sync(&root, true, ctx.clone());
                     }
                 }
@@ -1518,12 +1529,12 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     });
     if app.git.remote.is_none() {
         ui.add_space(4.0);
-        ui.collapsing(egui::RichText::new("Remote verbinden (GitHub, GitLab …)").font(widgets::ui_font(11.5)).color(pal.dim), |ui| {
+        ui.collapsing(egui::RichText::new(tr!("Remote verbinden (GitHub, GitLab …)" | "Connect remote (GitHub, GitLab …)")).font(widgets::ui_font(11.5)).color(pal.dim), |ui| {
             let id = egui::Id::new("git-remote-url");
             let mut url: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
             ui.add(egui::TextEdit::singleline(&mut url).hint_text("git@github.com:name/masterarbeit.git").desired_width(f32::INFINITY));
             ui.data_mut(|d| d.insert_temp(id, url.clone()));
-            if widgets::button(ui, ic::LINK, "Verbinden", pal, BtnKind::Secondary).clicked() && !url.trim().is_empty() {
+            if widgets::button(ui, ic::LINK, tr!("Verbinden" | "Connect"), pal, BtnKind::Secondary).clicked() && !url.trim().is_empty() {
                 let r = crate::platform::cmd("git").current_dir(&root).args(["remote", "add", "origin", url.trim()]).output();
                 if r.map(|o| o.status.success()).unwrap_or(false) {
                     app.git.refresh(&root, now);
@@ -1539,17 +1550,17 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         let n = app.git.changes.len();
         let n_sel = n - app.git.excluded.len().min(n);
         ui.horizontal(|ui| {
-            widgets::section_label(ui, &format!("Änderungen ({n})"), pal);
+            widgets::section_label(ui, &trf!("Änderungen ({n})" | "Changes ({n})"), pal);
             if n > 0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::icon_button_sized(ui, ic::UNDO, "Alle Änderungen verwerfen …", pal, false, 22.0).clicked() {
+                    if widgets::icon_button_sized(ui, ic::UNDO, tr!("Alle Änderungen verwerfen …" | "Discard all changes …"), pal, false, 22.0).clicked() {
                         app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![String::new()] });
                     }
                     if n < 2 {
                         return;
                     }
                     let all = app.git.excluded.is_empty();
-                    if ui.add(egui::Label::new(egui::RichText::new(if all { "Alle abwählen" } else { "Alle auswählen" }).font(widgets::ui_font(11.0)).color(pal.accent)).sense(Sense::click())).clicked() {
+                    if ui.add(egui::Label::new(egui::RichText::new(if all { tr!("Alle abwählen" | "Deselect all") } else { tr!("Alle auswählen" | "Select all") }).font(widgets::ui_font(11.0)).color(pal.accent)).sense(Sense::click())).clicked() {
                         if all {
                             app.git.excluded = app.git.changes.iter().map(|c| c.path.clone()).collect();
                         } else {
@@ -1560,7 +1571,7 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             }
         });
         if n == 0 {
-            ui.label(egui::RichText::new(format!("{}  Alles gesichert", ic::CHECK)).font(widgets::ui_font(12.0)).color(pal.green));
+            ui.label(egui::RichText::new(trf!("{}  Alles gesichert" | "{}  Everything saved", ic::CHECK)).font(widgets::ui_font(12.0)).color(pal.green));
         }
         let mut open_diff: Option<String> = None;
         let selected = match &app.git.view {
@@ -1579,7 +1590,7 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             // include-in-commit checkbox
             let included = !app.git.excluded.contains(&c.path);
             let cb = Rect::from_center_size(pos2(rect.min.x + 12.0, rect.center().y), vec2(14.0, 14.0));
-            let cresp = ui.interact(cb.expand(3.0), ui.id().with(("git-inc", &c.path)), Sense::click()).on_hover_text("Im nächsten Commit enthalten");
+            let cresp = ui.interact(cb.expand(3.0), ui.id().with(("git-inc", &c.path)), Sense::click()).on_hover_text(tr!("Im nächsten Commit enthalten" | "Included in the next commit"));
             ui.painter().rect_stroke(cb, 3.0, Stroke::new(1.2, if included { pal.accent } else { pal.dim }), StrokeKind::Inside);
             if included {
                 ui.painter().rect_filled(cb.shrink(1.0), 2.0, pal.accent);
@@ -1606,12 +1617,12 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
                 open_diff = Some(c.path.clone());
             }
             resp.context_menu(|ui| {
-                if crate::project::is_text_file(&c.path) && ui.button(format!("{}  Datei öffnen", ic::FILE_TEXT)).clicked() {
+                if crate::project::is_text_file(&c.path) && ui.button(trf!("{}  Datei öffnen" | "{}  Open file", ic::FILE_TEXT)).clicked() {
                     app.git.view = None;
                     app.open_file(&c.path, t);
                     ui.close();
                 }
-                if ui.button(egui::RichText::new(format!("{}  Änderungen verwerfen", ic::UNDO)).color(pal.red)).clicked() {
+                if ui.button(egui::RichText::new(trf!("{}  Änderungen verwerfen" | "{}  Discard changes", ic::UNDO)).color(pal.red)).clicked() {
                     app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![c.path.clone()] });
                     ui.close();
                 }
@@ -1622,16 +1633,16 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             app.git.open_working_diff(&root, &p);
         }
         ui.add_space(8.0);
-        ui.add(egui::TextEdit::multiline(&mut app.git.message).hint_text("Was hast du geändert? (optional)").desired_rows(2).desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::multiline(&mut app.git.message).hint_text(tr!("Was hast du geändert? (optional)" | "What did you change? (optional)")).desired_rows(2).desired_width(f32::INFINITY));
         ui.add_space(6.0);
         ui.add_enabled_ui(n_sel > 0, |ui| {
-            let label = if n_sel == n { "Commit – Stand sichern".to_string() } else { format!("Commit – {n_sel} von {n} Dateien") };
+            let label = if n_sel == n { tr!("Commit – Stand sichern" | "Commit – save state").to_string() } else { trf!("Commit – {n_sel} von {n} Dateien" | "Commit – {n_sel} of {n} files") };
             if widgets::button(ui, ic::CHECK, &label, pal, BtnKind::Primary).clicked() {
                 app.save_all();
                 match app.git.commit(&root) {
                     Ok(()) => {
                         let g = pal.green;
-                        app.toast(ic::GIT, "Neuer Stand gesichert", g, now);
+                        app.toast(ic::GIT, tr!("Neuer Stand gesichert" | "New state saved"), g, now);
                         app.git.view = None;
                     }
                     Err(e) => {
@@ -1645,7 +1656,7 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         ui.add_space(14.0);
 
         // history
-        widgets::section_label(ui, &format!("Verlauf ({})", app.git.log.len()), pal);
+        widgets::section_label(ui, &trf!("Verlauf ({})" | "History ({})", app.git.log.len()), pal);
         let current = match &app.git.view {
             Some(crate::git::GitView::Commit(h)) => Some(h.clone()),
             _ => None,
@@ -1696,7 +1707,7 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, with_alpha(pal.border, 120)));
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(16.0, 6.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let (icon, sub) = match &view {
-        crate::git::GitView::WorkingFile(_) => (ic::PENCIL, "Ungesicherte Änderungen seit dem letzten Commit".to_string()),
+        crate::git::GitView::WorkingFile(_) => (ic::PENCIL, tr!("Ungesicherte Änderungen seit dem letzten Commit" | "Uncommitted changes since the last commit").to_string()),
         crate::git::GitView::Commit(h) => {
             let info = app.git.log.iter().find(|x| &x.hash == h).map(|x| format!("{}  ·  {}  ·  {}", x.short, x.author, crate::git::relative_time(x.time))).unwrap_or_default();
             (ic::HISTORY, info)
@@ -1708,14 +1719,15 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         ui.label(egui::RichText::new(sub).font(widgets::ui_font(11.5)).color(pal.dim));
     });
     c.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if widgets::icon_button_sized(ui, ic::TIMES, "Schließen", pal, false, 28.0).clicked() {
+        if widgets::icon_button_sized(ui, ic::TIMES, tr!("Schließen" | "Close"), pal, false, 28.0).clicked() {
             app.git.view = None;
         }
+
         if let crate::git::GitView::WorkingFile(p) = &view {
-            if widgets::button(ui, ic::UNDO, "Verwerfen", pal, BtnKind::Danger).clicked() {
+            if widgets::button(ui, ic::UNDO, tr!("Verwerfen" | "Discard"), pal, BtnKind::Danger).clicked() {
                 app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![p.clone()] });
             }
-            if crate::project::is_text_file(p) && widgets::button(ui, ic::FILE_TEXT, "Öffnen", pal, BtnKind::Secondary).clicked() {
+            if crate::project::is_text_file(p) && widgets::button(ui, ic::FILE_TEXT, tr!("Öffnen" | "Open"), pal, BtnKind::Secondary).clicked() {
                 let p = p.clone();
                 app.git.view = None;
                 app.open_file(&p, t);
@@ -1724,6 +1736,21 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     });
     if app.git.view.is_none() {
         return;
+    }
+    // view switch: inline / side by side
+    let row = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover()).0;
+    let mut sw = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(vec2(16.0, 5.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    sw.spacing_mut().item_spacing.x = 4.0;
+    sw.label(egui::RichText::new(tr!("ANSICHT" | "VIEW")).font(widgets::ui_font(10.0)).color(pal.dim).extra_letter_spacing(1.2));
+    sw.add_space(6.0);
+    let split = app.settings.diff_split;
+    if widgets::chip(&mut sw, ic::ALIGN_LEFT, tr!("Inline" | "Inline"), !split, pal.accent, pal).clicked() && split {
+        app.settings.diff_split = false;
+        app.settings.save();
+    }
+    if widgets::chip(&mut sw, ic::COLUMNS, tr!("Nebeneinander" | "Side by side"), split, pal.accent, pal).clicked() && !split {
+        app.settings.diff_split = true;
+        app.settings.save();
     }
     // files of a commit, each restorable
     if let crate::git::GitView::Commit(h) = &view {
@@ -1740,7 +1767,7 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(&f.code[..1]).font(widgets::mono_font(11.5)).color(col));
                                 ui.label(egui::RichText::new(&f.path).font(widgets::ui_font(12.0)).color(pal.text));
-                                if !f.code.starts_with('D') && widgets::icon_button_sized(ui, ic::UNDO, "Datei auf diesen Stand zurücksetzen", pal, false, 22.0).clicked() {
+                                if !f.code.starts_with('D') && widgets::icon_button_sized(ui, ic::UNDO, tr!("Datei auf diesen Stand zurücksetzen" | "Reset file to this state"), pal, false, 22.0).clicked() {
                                     app.dialog = Some(crate::app::Dialog::GitRestore { hash: h.clone(), path: f.path.clone() });
                                 }
                             });
@@ -1751,6 +1778,10 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         }
     }
     // diff
+    if app.settings.diff_split {
+        split_diff(ui, &app.git.view_lines, pal);
+        return;
+    }
     let lines = &app.git.view_lines;
     let row_h = 19.0;
     egui::ScrollArea::both().auto_shrink([false, false]).id_salt("git-diff").show_rows(ui, row_h, lines.len(), |ui, range| {
@@ -1772,4 +1803,72 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         }
     });
     let _ = root;
+}
+
+/// Side-by-side diff (old left, new right) with line numbers and intra-line highlights.
+fn split_diff(ui: &mut Ui, lines: &[(crate::git::DiffKind, String)], pal: &Palette) {
+    use crate::git::SplitRow;
+    let rows = crate::git::split_rows(lines);
+    let row_h = 20.0;
+    let font = widgets::mono_font(12.5);
+    let num_font = widgets::mono_font(11.0);
+    let del_bg = with_alpha(pal.red, 26);
+    let del_hi = with_alpha(pal.red, 70);
+    let add_bg = with_alpha(pal.green, 26);
+    let add_hi = with_alpha(pal.green, 70);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("git-diff-split").show_rows(ui, row_h, rows.len(), |ui, range| {
+        for row in &rows[range] {
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::hover());
+            let p = ui.painter();
+            let mid = rect.center().x;
+            match row {
+                SplitRow::File(name) => {
+                    p.rect_filled(rect, 0.0, pal.surface);
+                    p.text(pos2(rect.min.x + 14.0, rect.center().y), Align2::LEFT_CENTER, format!("{}  {name}", ic::FILE_TEXT), widgets::bold_font(12.5), pal.bright);
+                }
+                SplitRow::Hunk(h) => {
+                    p.rect_filled(rect, 0.0, with_alpha(pal.cyan, 16));
+                    p.text(pos2(rect.min.x + 14.0, rect.center().y), Align2::LEFT_CENTER, h, num_font.clone(), pal.cyan);
+                }
+                SplitRow::Line { old, new } => {
+                    let paired = old.is_some() && new.is_some() && old.as_ref().map(|o| &o.1) != new.as_ref().map(|n| &n.1);
+                    let spans = if paired { Some(crate::git::changed_span(&old.as_ref().unwrap().1, &new.as_ref().unwrap().1)) } else { None };
+                    for (side, cell) in [(0, old), (1, new)] {
+                        let half = if side == 0 { Rect::from_min_max(rect.min, pos2(mid - 0.5, rect.max.y)) } else { Rect::from_min_max(pos2(mid + 0.5, rect.min.y), rect.max) };
+                        let ctx_line = old.as_ref().map(|o| &o.1) == new.as_ref().map(|n| &n.1);
+                        let painter = p.with_clip_rect(half);
+                        match cell {
+                            None => {
+                                painter.rect_filled(half, 0.0, with_alpha(pal.text, 6));
+                            }
+                            Some((num, text)) => {
+                                let (bg, hi) = if ctx_line { (Color32::TRANSPARENT, Color32::TRANSPARENT) } else if side == 0 { (del_bg, del_hi) } else { (add_bg, add_hi) };
+                                if bg != Color32::TRANSPARENT {
+                                    painter.rect_filled(half, 0.0, bg);
+                                }
+                                painter.text(pos2(half.min.x + 40.0, half.center().y), Align2::RIGHT_CENTER, num.to_string(), num_font.clone(), pal.dim);
+                                let marker = if ctx_line { " " } else if side == 0 { "−" } else { "+" };
+                                painter.text(pos2(half.min.x + 50.0, half.center().y), Align2::CENTER_CENTER, marker, num_font.clone(), if side == 0 { pal.red } else { pal.green });
+                                let txt = text.replace('\t', "    ");
+                                let fg = if ctx_line { pal.subtext } else { pal.text };
+                                let g = painter.layout_no_wrap(txt, font.clone(), fg);
+                                let tx = half.min.x + 60.0;
+                                let ty = half.center().y - g.size().y / 2.0;
+                                if let Some(sp) = spans {
+                                    let (a, b) = if side == 0 { sp.0 } else { sp.1 };
+                                    if b > a {
+                                        let x0 = g.pos_from_cursor(egui::text::CCursor::new(a)).min.x;
+                                        let x1 = g.pos_from_cursor(egui::text::CCursor::new(b)).min.x;
+                                        painter.rect_filled(Rect::from_min_max(pos2(tx + x0 - 1.0, rect.min.y + 2.0), pos2(tx + x1 + 1.0, rect.max.y - 2.0)), 3.0, hi);
+                                    }
+                                }
+                                painter.galley(pos2(tx, ty), g, fg);
+                            }
+                        }
+                    }
+                    p.line_segment([pos2(mid, rect.min.y), pos2(mid, rect.max.y)], Stroke::new(1.0, with_alpha(pal.border, 140)));
+                }
+            }
+        }
+    });
 }

@@ -1,6 +1,8 @@
 //! nEdit — a native LaTeX studio for theses and talks.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
 mod app;
 mod bib;
 mod compile;
@@ -12,6 +14,7 @@ mod icons;
 mod pdfview;
 mod platform;
 mod project;
+mod quickopen;
 mod shelf;
 mod shelf_ui;
 mod theme;
@@ -32,14 +35,14 @@ fn main() -> eframe::Result {
         match updater::cli_update() {
             Ok(m) => println!("{m}"),
             Err(e) => {
-                eprintln!("Fehler: {e}");
+                eprintln!("{}", trf!("Fehler: {e}" | "Error: {e}"));
                 std::process::exit(1);
             }
         }
         return Ok(());
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("nEdit {} – LaTeX Studio\n\n  nedit            App starten\n  nedit --update   auf das neueste Release aktualisieren\n  nedit --version  Version anzeigen", updater::VERSION);
+        println!("{}", trf!("nEdit {} – LaTeX Studio\n\n  nedit            App starten\n  nedit --update   auf das neueste Release aktualisieren\n  nedit --version  Version anzeigen" | "nEdit {} – LaTeX Studio\n\n  nedit            start the app\n  nedit --update   update to the latest release\n  nedit --version  show version", updater::VERSION));
         return Ok(());
     }
     let options = eframe::NativeOptions {

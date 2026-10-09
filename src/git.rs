@@ -13,12 +13,12 @@ impl Change {
     pub fn label(&self) -> (&'static str, char) {
         let c = self.code.trim();
         match c {
-            "??" => ("Neu", 'N'),
-            _ if c.contains('D') => ("Gelöscht", 'D'),
-            _ if c.contains('A') => ("Hinzugefügt", 'A'),
-            _ if c.contains('R') => ("Umbenannt", 'R'),
-            _ if c.contains('U') => ("Konflikt", 'U'),
-            _ => ("Geändert", 'M'),
+            "??" => (tr!("Neu" | "New"), 'N'),
+            _ if c.contains('D') => (tr!("Gelöscht" | "Deleted"), 'D'),
+            _ if c.contains('A') => (tr!("Hinzugefügt" | "Added"), 'A'),
+            _ if c.contains('R') => (tr!("Umbenannt" | "Renamed"), 'R'),
+            _ if c.contains('U') => (tr!("Konflikt" | "Conflict"), 'U'),
+            _ => (tr!("Geändert" | "Modified"), 'M'),
         }
     }
 }
@@ -122,7 +122,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
         .env("LC_ALL", "C")
         .args(args)
         .output()
-        .map_err(|e| format!("git nicht gefunden: {e}"))?;
+        .map_err(|e| trf!("git nicht gefunden: {e}" | "git not found: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -238,19 +238,19 @@ impl GitState {
         std::fs::write(&gi, ignore).map_err(|e| e.to_string())?;
         git(root, &["init", "-b", "main"])?;
         git(root, &["add", "-A"])?;
-        git(root, &["commit", "-m", "Erste Version"])?;
+        git(root, &["commit", "-m", tr!("Erste Version" | "First version")])?;
         Ok(())
     }
 
     pub fn commit(&mut self, root: &Path) -> Result<(), String> {
-        let msg = if self.message.trim().is_empty() { format!("Stand vom {}", chrono_like_now()) } else { self.message.trim().to_string() };
+        let msg = if self.message.trim().is_empty() { trf!("Stand vom {}" | "State of {}", chrono_like_now()) } else { self.message.trim().to_string() };
         if self.excluded.is_empty() {
             git(root, &["add", "-A"])?;
             git(root, &["commit", "-m", &msg])?;
         } else {
             let sel: Vec<String> = self.changes.iter().filter(|c| !self.excluded.contains(&c.path)).map(|c| c.path.clone()).collect();
             if sel.is_empty() {
-                return Err("Keine Datei ausgewählt".into());
+                return Err(tr!("Keine Datei ausgewählt" | "No file selected").into());
             }
             let mut add = vec!["add", "-A", "--"];
             add.extend(sel.iter().map(String::as_str));
@@ -310,12 +310,12 @@ impl GitState {
         let (tx, rx) = channel();
         let root = root.to_path_buf();
         self.busy = true;
-        self.status = if pull { "Hole Änderungen …".into() } else { "Lade hoch …".into() };
+        self.status = if pull { tr!("Hole Änderungen …" | "Fetching changes …").into() } else { tr!("Lade hoch …" | "Uploading …").into() };
         std::thread::spawn(move || {
             let r = if pull {
-                git(&root, &["pull", "--rebase", "--autostash"]).map(|_| "Aktualisiert".to_string())
+                git(&root, &["pull", "--rebase", "--autostash"]).map(|_| tr!("Aktualisiert" | "Updated").to_string())
             } else {
-                git(&root, &["push", "-u", "origin", "HEAD"]).map(|_| "Hochgeladen".to_string())
+                git(&root, &["push", "-u", "origin", "HEAD"]).map(|_| tr!("Hochgeladen" | "Uploaded").to_string())
             };
             let _ = tx.send(r);
             ctx.request_repaint();
@@ -466,6 +466,88 @@ fn status_snapshot(root: &Path) -> StatusSnapshot {
     s
 }
 
+/// One row of a side-by-side diff.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SplitRow {
+    File(String),
+    Hunk(String),
+    Line { old: Option<(usize, String)>, new: Option<(usize, String)> },
+}
+
+/// Turn a unified diff into side-by-side rows: context lines on both sides, runs of
+/// deletions and additions paired up line by line.
+pub fn split_rows(lines: &[(DiffKind, String)]) -> Vec<SplitRow> {
+    let re = regex::Regex::new(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@").unwrap();
+    let mut out = vec![];
+    let (mut o, mut n) = (1usize, 1usize);
+    let mut dels: Vec<(usize, String)> = vec![];
+    let mut adds: Vec<(usize, String)> = vec![];
+    fn flush(out: &mut Vec<SplitRow>, dels: &mut Vec<(usize, String)>, adds: &mut Vec<(usize, String)>) {
+        let k = dels.len().max(adds.len());
+        for i in 0..k {
+            out.push(SplitRow::Line { old: dels.get(i).cloned(), new: adds.get(i).cloned() });
+        }
+        dels.clear();
+        adds.clear();
+    }
+    for (k, l) in lines {
+        match k {
+            DiffKind::Header => {
+                flush(&mut out, &mut dels, &mut adds);
+                if let Some(rest) = l.strip_prefix("diff --git a/") {
+                    let name = rest.split(" b/").last().unwrap_or(rest).to_string();
+                    out.push(SplitRow::File(name));
+                }
+            }
+            DiffKind::Hunk => {
+                flush(&mut out, &mut dels, &mut adds);
+                if let Some(c) = re.captures(l) {
+                    o = c[1].parse().unwrap_or(1);
+                    n = c[2].parse().unwrap_or(1);
+                }
+                out.push(SplitRow::Hunk(l.clone()));
+            }
+            DiffKind::Del => {
+                if !adds.is_empty() {
+                    flush(&mut out, &mut dels, &mut adds);
+                }
+                dels.push((o, l[1..].to_string()));
+                o += 1;
+            }
+            DiffKind::Add => {
+                adds.push((n, l[1..].to_string()));
+                n += 1;
+            }
+            DiffKind::Ctx => {
+                flush(&mut out, &mut dels, &mut adds);
+                let t = l.strip_prefix(' ').unwrap_or(l).to_string();
+                if !l.starts_with('\\') {
+                    out.push(SplitRow::Line { old: Some((o, t.clone())), new: Some((n, t)) });
+                    o += 1;
+                    n += 1;
+                }
+            }
+        }
+    }
+    flush(&mut out, &mut dels, &mut adds);
+    out
+}
+
+/// Changed middle part of two lines (char ranges) for intra-line highlighting.
+pub fn changed_span(a: &str, b: &str) -> ((usize, usize), (usize, usize)) {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut p = 0;
+    while p < a.len() && p < b.len() && a[p] == b[p] {
+        p += 1;
+    }
+    let mut s = 0;
+    while s < a.len() - p && s < b.len() - p && a[a.len() - 1 - s] == b[b.len() - 1 - s] {
+        s += 1;
+    }
+    ((p, a.len() - s), (p, b.len() - s))
+}
+
 fn parse_diff(text: &str) -> Vec<(DiffKind, String)> {
     text.lines()
         .take(6000)
@@ -509,6 +591,18 @@ pub fn relative_time(ts: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_view() {
+        let d = parse_diff("diff --git a/x.tex b/x.tex\n--- a/x.tex\n+++ b/x.tex\n@@ -3,3 +3,4 @@\n eins\n-zwei alt\n+zwei neu\n+drei\n vier");
+        let rows = split_rows(&d);
+        assert_eq!(rows[0], SplitRow::File("x.tex".into()));
+        assert_eq!(rows[2], SplitRow::Line { old: Some((3, "eins".into())), new: Some((3, "eins".into())) });
+        assert_eq!(rows[3], SplitRow::Line { old: Some((4, "zwei alt".into())), new: Some((4, "zwei neu".into())) });
+        assert_eq!(rows[4], SplitRow::Line { old: None, new: Some((5, "drei".into())) });
+        assert_eq!(rows[5], SplitRow::Line { old: Some((5, "vier".into())), new: Some((6, "vier".into())) });
+        assert_eq!(changed_span("zwei alt", "zwei neu"), ((5, 8), (5, 8)));
+    }
 
     #[test]
     fn init_commit_history_restore() {

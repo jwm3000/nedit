@@ -34,7 +34,7 @@ impl BibEntry {
     }
 
     pub fn title(&self) -> String {
-        clean(self.get("title").unwrap_or("(ohne Titel)"))
+        clean(self.get("title").unwrap_or(tr!("(ohne Titel)" | "(untitled)")))
     }
 
     pub fn year(&self) -> String {
@@ -54,7 +54,7 @@ impl BibEntry {
         let a = self.authors();
         let last: Vec<String> = a.iter().map(|n| last_name(n)).collect();
         match last.len() {
-            0 => "Unbekannt".into(),
+            0 => tr!("Unbekannt" | "Unknown").into(),
             1 => last[0].clone(),
             2 => format!("{} & {}", last[0], last[1]),
             _ => format!("{} et al.", last[0]),

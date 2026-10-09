@@ -9,6 +9,7 @@ pub enum Mode {
     Insert,
     Visual,
     VisualLine,
+    VisualBlock,
 }
 
 impl Mode {
@@ -18,6 +19,7 @@ impl Mode {
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
             Mode::VisualLine => "V-LINE",
+            Mode::VisualBlock => "V-BLOCK",
         }
     }
 }
@@ -71,6 +73,18 @@ pub struct VimState {
     insert_log: Vec<VKey>,
     recording: bool,
     replaying: bool,
+    reg_block: bool,
+    block_eol: bool,
+    block_ins: Option<BlockIns>,
+}
+
+/// Pending visual-block insert (`I`, `A`, `c`): replicate the typed text on Esc.
+#[derive(Clone, Debug)]
+struct BlockIns {
+    lines: Vec<usize>,
+    col: usize,
+    pad: bool,
+    eol: bool,
 }
 
 enum Step {
@@ -338,6 +352,158 @@ impl VimState {
         out.yanked = Some(s.clone());
         self.register = s;
         self.reg_line = line;
+        self.reg_block = false;
+    }
+
+    /// Lines and columns spanned by the visual block: (first_line, last_line, first_col, last_col).
+    fn block_bounds(&self, c: &[char]) -> (usize, usize, usize, usize) {
+        let (la, lb) = (line_of(c, self.anchor), line_of(c, self.pos));
+        let (ca, cb) = (self.anchor - ls(c, self.anchor), self.pos - ls(c, self.pos));
+        (la.min(lb), la.max(lb), ca.min(cb), ca.max(cb))
+    }
+
+    /// Char ranges of the visual block, one per line (for drawing and operating).
+    pub fn block_ranges(&self, text: &str) -> Vec<(usize, usize)> {
+        if self.mode != Mode::VisualBlock {
+            return vec![];
+        }
+        let c: Vec<char> = text.chars().collect();
+        self.block_ranges_c(&c)
+    }
+
+    fn block_ranges_c(&self, c: &[char]) -> Vec<(usize, usize)> {
+        let (l0, l1, c0, c1) = self.block_bounds(c);
+        (l0..=l1)
+            .filter_map(|ln| {
+                let s = line_start_n(c, ln);
+                let e = le(c, s);
+                let a = s + c0;
+                if a > e || (a == e && !self.block_eol) {
+                    return None;
+                }
+                let b = if self.block_eol { e } else { (s + c1 + 1).min(e) };
+                Some((a, b))
+            })
+            .collect()
+    }
+
+    fn block_cmd(&mut self, text: &mut String, k: &VKey, rest: &[VKey], n: usize, out: &mut VimOut) -> Step {
+        let mut c = Self::chars(text);
+        let (l0, l1, c0, c1) = self.block_bounds(&c);
+        let ranges = self.block_ranges_c(&c);
+        let top_left = line_start_n(&c, l0) + c0.min(le(&c, line_start_n(&c, l0)) - line_start_n(&c, l0));
+        match k {
+            VKey::Ch('o') | VKey::Ch('O') => {
+                std::mem::swap(&mut self.anchor, &mut self.pos);
+                Step::Done
+            }
+            VKey::Ch('$') | VKey::End => {
+                self.block_eol = true;
+                let e = le(&c, self.pos);
+                self.pos = e.saturating_sub(1).max(ls(&c, self.pos));
+                Step::Done
+            }
+            VKey::Ch('d') | VKey::Ch('x') | VKey::Del | VKey::Ch('y') => {
+                let parts: Vec<String> = (l0..=l1)
+                    .map(|ln| {
+                        ranges.iter().find(|r| line_of(&c, r.0) == ln).map(|&(a, b)| c[a..b].iter().collect()).unwrap_or_default()
+                    })
+                    .collect();
+                self.yank(parts.join("\n"), false, out);
+                self.reg_block = true;
+                if *k != VKey::Ch('y') {
+                    for &(a, b) in ranges.iter().rev() {
+                        c.drain(a..b);
+                    }
+                    Self::set_text(text, &c);
+                    out.changed = true;
+                }
+                self.pos = top_left;
+                self.mode = Mode::Normal;
+                Step::Done
+            }
+            VKey::Ch('c') | VKey::Ch('s') | VKey::Ch('I') | VKey::Ch('A') => {
+                let change = matches!(k, VKey::Ch('c') | VKey::Ch('s'));
+                if change {
+                    for &(a, b) in ranges.iter().rev() {
+                        c.drain(a..b);
+                    }
+                    Self::set_text(text, &c);
+                    out.changed = true;
+                }
+                let append = *k == VKey::Ch('A');
+                let col = if append { c1 + 1 } else { c0 };
+                let eol = append && self.block_eol;
+                let s0 = line_start_n(&c, l0);
+                let e0 = le(&c, s0);
+                self.pos = if eol { e0 } else { (s0 + col).min(e0) };
+                if append && !eol && s0 + col > e0 {
+                    for _ in e0..s0 + col {
+                        c.insert(e0, ' ');
+                    }
+                    Self::set_text(text, &c);
+                    self.pos = s0 + col;
+                }
+                self.mode = Mode::Normal;
+                self.enter_insert();
+                self.block_ins = Some(BlockIns { lines: (l0 + 1..=l1).collect(), col, pad: append, eol });
+                Step::Done
+            }
+            VKey::Ch('r') => {
+                let Some(next) = rest.first() else { return Step::Wait };
+                let Some(ch) = key_char(next) else { return Step::Bad };
+                for &(a, b) in &ranges {
+                    for x in a..b {
+                        c[x] = ch;
+                    }
+                }
+                Self::set_text(text, &c);
+                out.changed = true;
+                self.pos = top_left;
+                self.mode = Mode::Normal;
+                Step::Done
+            }
+            VKey::Ch('~') | VKey::Ch('u') | VKey::Ch('U') => {
+                for &(a, b) in &ranges {
+                    for x in a..b {
+                        let ch = c[x];
+                        c[x] = match k {
+                            VKey::Ch('u') => ch.to_lowercase().next().unwrap_or(ch),
+                            VKey::Ch('U') => ch.to_uppercase().next().unwrap_or(ch),
+                            _ if ch.is_uppercase() => ch.to_lowercase().next().unwrap_or(ch),
+                            _ => ch.to_uppercase().next().unwrap_or(ch),
+                        };
+                    }
+                }
+                Self::set_text(text, &c);
+                out.changed = true;
+                self.pos = top_left;
+                self.mode = Mode::Normal;
+                Step::Done
+            }
+            VKey::Ch('>') | VKey::Ch('<') => {
+                let a = line_start_n(&c, l0);
+                let b = le(&c, line_start_n(&c, l1));
+                self.mode = Mode::Normal;
+                let op = if *k == VKey::Ch('>') { '>' } else { '<' };
+                self.operate_range(text, op, a, b, true, out)
+            }
+            _ => {
+                let mut seq = vec![k.clone()];
+                seq.extend_from_slice(rest);
+                match self.motion(&c, &seq, n, None) {
+                    MRes::Wait => Step::Wait,
+                    MRes::To(mv) => {
+                        if !matches!(k, VKey::Ch('j') | VKey::Ch('k') | VKey::Up | VKey::Down) {
+                            self.block_eol = false;
+                        }
+                        self.pos = mv.to;
+                        Step::Done
+                    }
+                    _ => Step::Bad,
+                }
+            }
+        }
     }
 
     fn enter_insert(&mut self) {
@@ -389,6 +555,33 @@ impl VimState {
                 VKey::Esc => {
                     self.mode = Mode::Normal;
                     self.recording = false;
+                    if let Some(bi) = self.block_ins.take() {
+                        let typed = typed_text(&self.insert_log);
+                        if !typed.is_empty() && !typed.contains('\n') {
+                            let ins: Vec<char> = typed.chars().collect();
+                            for &ln in bi.lines.iter().rev() {
+                                if ln >= line_count(&c) {
+                                    continue;
+                                }
+                                let s = line_start_n(&c, ln);
+                                let e = le(&c, s);
+                                let at = if bi.eol { e } else { s + bi.col };
+                                if at > e {
+                                    if !bi.pad {
+                                        continue;
+                                    }
+                                    for _ in e..at {
+                                        c.insert(e, ' ');
+                                    }
+                                }
+                                for (k, ch) in ins.iter().enumerate() {
+                                    c.insert(at + k, *ch);
+                                }
+                            }
+                            Self::set_text(text, &c);
+                            out.changed = true;
+                        }
+                    }
                     if self.pos > ls(&c, self.pos) {
                         self.pos -= 1;
                     }
@@ -465,8 +658,17 @@ impl VimState {
         }
         let n = count.unwrap_or(1);
         let c = Self::chars(text);
-        let visual = matches!(self.mode, Mode::Visual | Mode::VisualLine);
+        let visual = matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock);
         let k = toks[i].clone();
+        if k == VKey::Ctrl('v') || k == VKey::Ctrl('q') {
+            self.mode = if self.mode == Mode::VisualBlock { Mode::Normal } else { Mode::VisualBlock };
+            self.anchor = self.pos;
+            self.block_eol = false;
+            return Step::Done;
+        }
+        if self.mode == Mode::VisualBlock {
+            return self.block_cmd(text, &k, &toks[i + 1..], n, out);
+        }
         let rest = &toks[i + 1..];
 
         // keys that need one more character
@@ -567,7 +769,7 @@ impl VimState {
                 }
                 let m = crate::editor::find_matches(text, &self.last_search);
                 if m.is_empty() {
-                    self.message = format!("Nicht gefunden: {}", self.last_search);
+                    self.message = trf!("Nicht gefunden: {}" | "Not found: {}", self.last_search);
                     return Step::Done;
                 }
                 let fwd = k == VKey::Ch('n');
@@ -656,6 +858,31 @@ impl VimState {
                     Self::set_text(text, &c);
                     out.changed = true;
                 }
+                true
+            }
+            VKey::Ch('p') | VKey::Ch('P') if self.reg_block => {
+                let col = self.pos - ls(&c, self.pos) + if k == VKey::Ch('p') && self.pos < le(&c, self.pos) { 1 } else { 0 };
+                let start_line = line_of(&c, self.pos);
+                let parts: Vec<String> = self.register.split('\n').map(String::from).collect();
+                for (i, part) in parts.iter().enumerate() {
+                    let ln = start_line + i;
+                    while ln >= line_count(&c) {
+                        c.push('\n');
+                    }
+                    let s = line_start_n(&c, ln);
+                    let e = le(&c, s);
+                    if s + col > e {
+                        for _ in e..s + col {
+                            c.insert(e, ' ');
+                        }
+                    }
+                    for (k2, ch) in part.chars().enumerate() {
+                        c.insert(s + col + k2, ch);
+                    }
+                }
+                Self::set_text(text, &c);
+                self.pos = ls(&c, self.pos) + col;
+                out.changed = true;
                 true
             }
             VKey::Ch('p') | VKey::Ch('P') => {
@@ -1353,7 +1580,7 @@ impl VimState {
                 self.anchor = buf.sel_end;
                 self.pos = buf.cursor.saturating_sub(if buf.cursor > buf.sel_end { 1 } else { 0 });
             } else {
-                if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+                if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
                     self.mode = Mode::Normal;
                 }
                 self.pos = buf.cursor.min(buf.sel_end);
@@ -1419,7 +1646,17 @@ impl VimState {
                         None
                     }
                     Event::Key { pressed: false, .. } if consume_all => continue,
-                    Event::Paste(_) | Event::Copy | Event::Cut if consume_all => continue,
+                    // egui-winit turns Ctrl+V / Ctrl+C into clipboard events – in Normal/Visual
+                    // mode they mean visual-block and "escape" like in Vim
+                    Event::Paste(_) if consume_all => {
+                        toks.push(VKey::Ctrl('v'));
+                        continue;
+                    }
+                    Event::Copy if consume_all => {
+                        toks.push(VKey::Ctrl('c'));
+                        continue;
+                    }
+                    Event::Cut if consume_all => continue,
                     _ => None,
                 };
                 let _: Option<()> = tok;
@@ -1451,6 +1688,7 @@ impl VimState {
                 let (a, b) = self.vrange(&c);
                 (a, b)
             }
+            Mode::VisualBlock => (self.pos, self.pos),
         };
         if self.last_set != Some(want) || !toks.is_empty() {
             if self.mode == Mode::Insert && toks.is_empty() {
@@ -1494,6 +1732,23 @@ impl VimState {
             .collect();
         (self.mode.label().to_string(), if self.message.is_empty() { pend } else { self.message.clone() })
     }
+}
+
+/// Text typed during an insert session (for replaying on other block lines).
+fn typed_text(log: &[VKey]) -> String {
+    let mut s = String::new();
+    for k in log {
+        match k {
+            VKey::Ch(c) => s.push(*c),
+            VKey::Tab => s.push_str("  "),
+            VKey::Back => {
+                s.pop();
+            }
+            VKey::Enter => s.push('\n'),
+            _ => {}
+        }
+    }
+    s
 }
 
 fn toks_count_explicit(n: usize) -> bool {
@@ -1602,6 +1857,24 @@ mod tests {
         assert_eq!(run("abc", 0, "rz").0, "zbc");
         assert_eq!(run("a", 0, ">>").0, "  a");
         assert_eq!(run("a", 0, "oneu<esc>").0, "a\nneu");
+    }
+
+    #[test]
+    fn visual_block() {
+        // comment out three lines with Ctrl-v j j I % Esc
+        assert_eq!(run("a\nb\nc", 0, "<c-v>jjI% <esc>").0, "% a\n% b\n% c");
+        // delete a column
+        assert_eq!(run("abc\nabc\nabc", 1, "<c-v>jjd").0, "ac\nac\nac");
+        // change a column
+        assert_eq!(run("x1\nx2", 0, "<c-v>jcy<esc>").0, "y1\ny2");
+        // append after block, padding short lines
+        assert_eq!(run("ab\na\nab", 0, "<c-v>jjlA|<esc>").0, "ab|\na |\nab|");
+        // yank block and paste
+        assert_eq!(run("ab\ncd", 0, "<c-v>jyP").0, "aab\nccd");
+        // replace block
+        assert_eq!(run("abc\nabc", 0, "<c-v>jlrx").0, "xxc\nxxc");
+        // append at line ends with $
+        assert_eq!(run("a\nbcd", 0, "<c-v>j$A;<esc>").0, "a;\nbcd;");
     }
 
     #[test]

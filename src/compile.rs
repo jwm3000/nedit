@@ -95,7 +95,7 @@ fn run(spec: &CompileSpec) -> CompileResult {
             raw_log.push_str(&String::from_utf8_lossy(&o.stdout));
             raw_log.push_str(&String::from_utf8_lossy(&o.stderr));
         }
-        Err(e) => raw_log = format!("latexmk konnte nicht gestartet werden: {e}\nIst TeX Live installiert?"),
+        Err(e) => raw_log = trf!("latexmk konnte nicht gestartet werden: {e}\nIst TeX Live installiert?" | "Could not start latexmk: {e}\nIs TeX Live installed?"),
     }
     let stem = spec.stem();
     let log = std::fs::read(outdir.join(format!("{stem}.log"))).map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default();
@@ -104,7 +104,7 @@ fn run(spec: &CompileSpec) -> CompileResult {
     issues.extend(parse_blg(&blg));
     add_hints(&mut issues, &raw_log);
     if issues.iter().all(|i| i.level != Level::Error) && !ok && log.is_empty() {
-        issues.insert(0, Issue { level: Level::Error, file: None, line: None, message: "Kompilieren fehlgeschlagen".into(), context: raw_log.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n") });
+        issues.insert(0, Issue { level: Level::Error, file: None, line: None, message: tr!("Kompilieren fehlgeschlagen" | "Compilation failed").into(), context: raw_log.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n") });
     }
     let pdf = spec.pdf_path();
     let pdf = pdf.exists().then_some(pdf);
@@ -127,8 +127,8 @@ fn add_hints(issues: &mut Vec<Issue>, latexmk_out: &str) {
                 level: Level::Error,
                 file: None,
                 line: None,
-                message: "biber ist nicht installiert – das Dokument nutzt biblatex mit backend=biber, daher fehlt das Literaturverzeichnis.".into(),
-                context: "Installieren mit:  sudo pacman -S biber".into(),
+                message: tr!("biber ist nicht installiert – das Dokument nutzt biblatex mit backend=biber, daher fehlt das Literaturverzeichnis." | "biber is not installed – the document uses biblatex with backend=biber, so the bibliography is missing.").into(),
+                context: tr!("Installieren mit:  sudo pacman -S biber" | "Install with:  sudo pacman -S biber").into(),
             },
         );
     }
@@ -144,7 +144,7 @@ fn add_hints(issues: &mut Vec<Issue>, latexmk_out: &str) {
                     "italian" => "texlive-langitalian",
                     _ => "texlive-lang",
                 };
-                is.context = format!("Die Sprache „{lang}“ fehlt in TeX Live. Installieren mit:  sudo pacman -S {pkg}\n\n{}", is.context);
+                is.context = trf!("Die Sprache „{lang}“ fehlt in TeX Live. Installieren mit:  sudo pacman -S {pkg}\n\n{}" | "The language “{lang}” is missing in TeX Live. Install with:  sudo pacman -S {pkg}\n\n{}", is.context);
             }
         }
     }

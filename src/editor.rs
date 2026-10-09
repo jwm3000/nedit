@@ -27,6 +27,8 @@ pub struct Buffer {
     search_pulse: (usize, f64),
     /// Vim block cursor: Some(Some(pos)) fixed position, Some(None) = at the live cursor.
     pub vim_block: Option<Option<usize>>,
+    /// Vim visual-block selection (char ranges, one per line).
+    pub vim_block_sel: Vec<(usize, usize)>,
     pub doc_height: f32,
     pub last_edit: f64,
     pub completion: Option<Completion>,
@@ -70,6 +72,7 @@ impl Buffer {
             search_cache: None,
             search_pulse: (usize::MAX, 0.0),
             vim_block: None,
+            vim_block_sel: vec![],
             doc_height: 0.0,
             last_edit: 0.0,
             completion: None,
@@ -631,7 +634,7 @@ fn compute_completion(text: &str, cursor: usize, src: &CompletionSources) -> Opt
                     .filter_map(|e| {
                         fuzzy_score(e, prefix).map(|s| {
                             let insert = if cmd == "begin" { format!("{e}}}\n  $0\n\\end{{{e}}}") } else { format!("{e}}}") };
-                            (s, CompItem { label: e.to_string(), detail: "Umgebung".into(), insert })
+                            (s, CompItem { label: e.to_string(), detail: tr!("Umgebung" | "Environment").into(), insert })
                         })
                     })
                     .collect(),
@@ -669,7 +672,7 @@ fn compute_completion(text: &str, cursor: usize, src: &CompletionSources) -> Opt
             .map(|(n, ins)| (100 - n.len() as i32, CompItem { label: format!("\\{n}"), detail: String::new(), insert: ins.to_string() }))
             .collect();
         if prefix == "beg" || prefix == "begi" || prefix == "begin" {
-            items.insert(0, (200, CompItem { label: "\\begin{…}".into(), detail: "Umgebung".into(), insert: "begin{$0".into() }));
+            items.insert(0, (200, CompItem { label: "\\begin{…}".into(), detail: tr!("Umgebung" | "Environment").into(), insert: "begin{$0".into() }));
         }
         if items.is_empty() {
             return None;
@@ -769,11 +772,13 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
             });
             vim_normal = v.mode != crate::vim::Mode::Insert;
             buf.vim_block = Some(v.block_pos());
+            buf.vim_block_sel = v.block_ranges(&buf.text);
             out.vim = Some(vo);
         }
     }
     if vim.is_none() {
         buf.vim_block = None;
+        buf.vim_block_sel.clear();
     } else if !has_focus {
         // keep showing the block where we left off
         buf.vim_block = buf.vim_block.map(|b| b.or(Some(buf.cursor)));
@@ -1029,6 +1034,7 @@ fn editor_core(
 
     let bg_idx = ui.painter().add(Shape::Noop);
     let search_idx = ui.painter().add(Shape::Noop);
+    let vsel_idx = ui.painter().add(Shape::Noop);
     let chip_idx = ui.painter().add(Shape::Noop);
     let syn = st.syntax;
     let size = st.font_size;
@@ -1308,6 +1314,21 @@ fn editor_core(
                 painter.rect_filled(tr, 1.5, if is_cur { pal.accent } else { with_alpha(hit, 210) });
             }
         }
+    }
+
+    // ── vim visual-block selection ──
+    if !buf.vim_block_sel.is_empty() {
+        let mut shapes = vec![];
+        for &(a, b) in &buf.vim_block_sel {
+            let r0 = galley.pos_from_cursor(CCursor::new(a)).translate(gpos.to_vec2());
+            let r1 = galley.pos_from_cursor(CCursor { index: b.into(), prefer_next_row: false }).translate(gpos.to_vec2());
+            if r0.max.y < clip.min.y || r0.min.y > clip.max.y {
+                continue;
+            }
+            let x1 = if (r1.min.y - r0.min.y).abs() < 1.0 { r1.min.x } else { r0.min.x + st.font_size * 0.6 };
+            shapes.push(Shape::rect_filled(Rect::from_min_max(r0.min, pos2(x1.max(r0.min.x + 2.0), r0.max.y)), 0.0, pal.selection));
+        }
+        painter.set(vsel_idx, Shape::Vec(shapes));
     }
 
     // ── vim block cursor ──

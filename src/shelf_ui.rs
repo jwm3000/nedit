@@ -1,4 +1,4 @@
-//! The "Bibliothek" tab: a shelf of paper cards, adding by DOI/arXiv/title/BibTeX/PDF,
+//! The tr!("Bibliothek" | "Library") tab: a shelf of paper cards, adding by DOI/arXiv/title/BibTeX/PDF,
 //! a detail panel and a built-in PDF reader.
 
 use crate::app::{truncate, App, Tab};
@@ -11,16 +11,16 @@ use egui::{pos2, vec2, Align2, Color32, Frame, Margin, Rect, Sense, Stroke, Stro
 
 fn kind_label(p: &Paper) -> &'static str {
     match p.entry.kind.as_str() {
-        "article" => "Artikel",
-        "inproceedings" | "conference" | "proceedings" => "Konferenz",
-        "book" => "Buch",
-        "incollection" | "inbook" => "Kapitel",
-        "phdthesis" => "Dissertation",
-        "mastersthesis" | "thesis" => "Abschlussarbeit",
-        "techreport" | "report" => "Bericht",
+        "article" => tr!("Artikel" | "Article"),
+        "inproceedings" | "conference" | "proceedings" => tr!("Konferenz" | "Conference"),
+        "book" => tr!("Buch" | "Book"),
+        "incollection" | "inbook" => tr!("Kapitel" | "Chapter"),
+        "phdthesis" => tr!("Dissertation" | "PhD thesis"),
+        "mastersthesis" | "thesis" => tr!("Abschlussarbeit" | "Thesis"),
+        "techreport" | "report" => tr!("Bericht" | "Report"),
         "online" | "www" => "Web",
         _ if p.entry.get("eprint").is_some() || p.entry.get("archiveprefix").is_some() => "Preprint",
-        _ => "Sonstiges",
+        _ => tr!("Sonstiges" | "Other"),
     }
 }
 
@@ -43,7 +43,7 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
             ui.painter().rect_filled(bar, 0.0, pal.mantle);
             ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, with_alpha(pal.border, 150)));
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(14.0, 6.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            if widgets::button(&mut c, ic::ARROW_LEFT, "Bibliothek", &pal, BtnKind::Ghost).clicked() {
+            if widgets::button(&mut c, ic::ARROW_LEFT, tr!("Bibliothek" | "Library"), &pal, BtnKind::Ghost).clicked() {
                 app.shelf_ui.reading = None;
             }
             let title = app
@@ -55,16 +55,16 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
                 .unwrap_or(rel.clone());
             c.label(egui::RichText::new(truncate(&title, 90)).font(widgets::bold_font(13.5)).color(pal.bright));
             c.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button_sized(ui, ic::EXTERNAL, "Extern öffnen", &pal, false, 28.0).clicked() {
+                if widgets::icon_button_sized(ui, ic::EXTERNAL, tr!("Extern öffnen" | "Open externally"), &pal, false, 28.0).clicked() {
                     crate::platform::open_external(app.project.root.join(&rel));
                 }
-                if widgets::icon_button_sized(ui, ic::ZOOM_IN, "Vergrößern", &pal, false, 28.0).clicked() {
+                if widgets::icon_button_sized(ui, ic::ZOOM_IN, tr!("Vergrößern" | "Zoom in"), &pal, false, 28.0).clicked() {
                     app.reader.zoom_by(1.15);
                 }
-                if widgets::icon_button_sized(ui, ic::ZOOM_OUT, "Verkleinern", &pal, false, 28.0).clicked() {
+                if widgets::icon_button_sized(ui, ic::ZOOM_OUT, tr!("Verkleinern" | "Zoom out"), &pal, false, 28.0).clicked() {
                     app.reader.zoom_by(1.0 / 1.15);
                 }
-                if widgets::icon_button_sized(ui, ic::COLUMNS, "Breite", &pal, false, 28.0).clicked() {
+                if widgets::icon_button_sized(ui, ic::COLUMNS, tr!("Breite" | "Width"), &pal, false, 28.0).clicked() {
                     app.reader.zoom = crate::pdfview::Zoom::FitWidth;
                 }
                 let n = app.reader.page_count();
@@ -97,28 +97,28 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
         // ── header ──
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Bibliothek").font(widgets::display_font(34.0)).color(pal.bright));
+                ui.label(egui::RichText::new(tr!("Bibliothek" | "Library")).font(widgets::display_font(34.0)).color(pal.bright));
                 let n = app.shelf.papers.len();
                 let read = app.shelf.papers.iter().filter(|p| p.meta.status == ReadStatus::Read).count();
                 let pdfs = app.shelf.papers.iter().filter(|p| p.meta.pdf.is_some()).count();
-                ui.label(egui::RichText::new(format!("{n} Quellen  ·  {read} gelesen  ·  {pdfs} PDFs  ·  references.bib")).font(widgets::ui_font(12.5)).color(pal.dim));
+                ui.label(egui::RichText::new(trf!("{n} Quellen  ·  {read} gelesen  ·  {pdfs} PDFs  ·  references.bib" | "{n} sources  ·  {read} read  ·  {pdfs} PDFs  ·  references.bib")).font(widgets::ui_font(12.5)).color(pal.dim));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::button(ui, ic::CODE, "references.bib", &pal, BtnKind::Ghost).on_hover_text("Im Editor öffnen").clicked() {
+                if widgets::button(ui, ic::CODE, "references.bib", &pal, BtnKind::Ghost).on_hover_text(tr!("Im Editor öffnen" | "Open in editor")).clicked() {
                     app.open_file("references.bib", Tab::Thesis);
                     app.tab = Tab::Thesis;
                 }
-                if widgets::button(ui, ic::UPLOAD, "PDF importieren", &pal, BtnKind::Secondary).clicked() {
+                if widgets::button(ui, ic::UPLOAD, tr!("PDF importieren" | "Import PDF"), &pal, BtnKind::Secondary).clicked() {
                     let tx = app.shelf_tx.clone();
                     let c = ctx.clone();
                     app.shelf_ui.busy = true;
-                    app.shelf_ui.status = "Dateiauswahl …".into();
+                    app.shelf_ui.status = tr!("Dateiauswahl …" | "Choosing files …").into();
                     std::thread::spawn(move || {
-                        let files = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_title("Paper importieren").pick_files();
+                        let files = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_title(tr!("Paper importieren" | "Import paper")).pick_files();
                         match files {
                             Some(f) if !f.is_empty() => shelf::import_pdfs(f, tx, c),
                             _ => {
-                                let _ = tx.send(shelf::ShelfMsg::Error("Keine Datei gewählt".into()));
+                                let _ = tx.send(shelf::ShelfMsg::Error(tr!("Keine Datei gewählt" | "No file chosen").into()));
                                 c.request_repaint();
                             }
                         }
@@ -133,12 +133,12 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
         let mut submit = false;
         ui.horizontal(|ui| {
             let mut input = std::mem::take(&mut app.shelf_ui.input);
-            let r = widgets::search_field(ui, &mut input, "DOI, arXiv-ID, Titel suchen oder BibTeX einfügen …", ic::PLUS, &pal, w, "shelf-add");
+            let r = widgets::search_field(ui, &mut input, tr!("DOI, arXiv-ID, Titel suchen oder BibTeX einfügen …" | "DOI, arXiv ID, search a title or paste BibTeX …"), ic::PLUS, &pal, w, "shelf-add");
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 submit = true;
             }
             app.shelf_ui.input = input;
-            if widgets::button(ui, ic::SEARCH, "Hinzufügen", &pal, BtnKind::Primary).clicked() {
+            if widgets::button(ui, ic::SEARCH, tr!("Hinzufügen" | "Add"), &pal, BtnKind::Primary).clicked() {
                 submit = true;
             }
         });
@@ -155,10 +155,10 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
                     app.shelf_ui.input.clear();
                     app.shelf_ui.selected = last;
                     let g = pal.green;
-                    app.toast(ic::BOOK, format!("{n} Eintrag/Einträge übernommen"), g, now);
+                    app.toast(ic::BOOK, trf!("{n} Eintrag/Einträge übernommen" | "{n} entry/entries added"), g, now);
                     app.after_shelf_change();
                 } else {
-                    app.shelf_ui.status = "BibTeX konnte nicht gelesen werden".into();
+                    app.shelf_ui.status = tr!("BibTeX konnte nicht gelesen werden" | "Could not read BibTeX").into();
                 }
             } else {
                 app.shelf_ui.busy = true;
@@ -185,9 +185,9 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
                 ui.set_width(w + 140.0);
                 ui.horizontal(|ui| {
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new("TREFFER BEI CROSSREF").font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                    ui.label(egui::RichText::new(tr!("TREFFER BEI CROSSREF" | "RESULTS FROM CROSSREF")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::icon_button_sized(ui, ic::TIMES, "Schließen", &pal, false, 22.0).clicked() {
+                        if widgets::icon_button_sized(ui, ic::TIMES, tr!("Schließen" | "Close"), &pal, false, 22.0).clicked() {
                             app.shelf_ui.results.clear();
                         }
                     });
@@ -200,7 +200,7 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
                     let p = ui.painter();
                     p.text(pos2(rect.min.x + 12.0, rect.min.y + 16.0), Align2::LEFT_CENTER, truncate(&h.title, 95), widgets::bold_font(13.0), pal.bright);
                     p.text(pos2(rect.min.x + 12.0, rect.min.y + 35.0), Align2::LEFT_CENTER, format!("{}  ·  {}  ·  {}", h.authors, h.year, truncate(&h.venue, 60)), widgets::ui_font(11.5), pal.subtext);
-                    p.text(pos2(rect.max.x - 14.0, rect.center().y), Align2::RIGHT_CENTER, format!("{}  Hinzufügen", ic::PLUS), widgets::ui_font(12.0), if resp.hovered() { pal.accent } else { pal.dim });
+                    p.text(pos2(rect.max.x - 14.0, rect.center().y), Align2::RIGHT_CENTER, trf!("{}  Hinzufügen" | "{}  Add", ic::PLUS), widgets::ui_font(12.0), if resp.hovered() { pal.accent } else { pal.dim });
                     if resp.clicked() {
                         add = Some(h.doi.clone());
                     }
@@ -218,7 +218,7 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let sf = app.shelf_ui.status_filter;
-            if widgets::chip(ui, "", "Alle", sf.is_none() && !app.shelf_ui.fav_only, pal.accent, &pal).clicked() {
+            if widgets::chip(ui, "", tr!("Alle" | "All"), sf.is_none() && !app.shelf_ui.fav_only, pal.accent, &pal).clicked() {
                 app.shelf_ui.status_filter = None;
                 app.shelf_ui.fav_only = false;
                 app.shelf_ui.tag_filter = None;
@@ -228,7 +228,7 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
                     app.shelf_ui.status_filter = if sf == Some(s) { None } else { Some(s) };
                 }
             }
-            if widgets::chip(ui, ic::STAR, "Favoriten", app.shelf_ui.fav_only, pal.yellow, &pal).clicked() {
+            if widgets::chip(ui, ic::STAR, tr!("Favoriten" | "Favorites"), app.shelf_ui.fav_only, pal.yellow, &pal).clicked() {
                 app.shelf_ui.fav_only = !app.shelf_ui.fav_only;
             }
             for t in app.shelf.all_tags() {
@@ -239,7 +239,7 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut f = std::mem::take(&mut app.shelf_ui.filter);
-                widgets::search_field(ui, &mut f, "Bibliothek durchsuchen", ic::SEARCH, &pal, 240.0, "shelf-filter");
+                widgets::search_field(ui, &mut f, tr!("Bibliothek durchsuchen" | "Search library"), ic::SEARCH, &pal, 240.0, "shelf-filter");
                 app.shelf_ui.filter = f;
             });
         });
@@ -283,7 +283,7 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
             }
             if visible.is_empty() {
                 ui.add_space(30.0);
-                ui.label(egui::RichText::new("Keine Quelle passt zu den Filtern.").color(pal.dim));
+                ui.label(egui::RichText::new(tr!("Keine Quelle passt zu den Filtern." | "No source matches the filters.")).color(pal.dim));
             }
         });
         if let Some(a) = action {
@@ -346,10 +346,10 @@ fn cite(app: &mut App, key: &str, now: f64) {
     match app.insert_snippet(t, &format!("{cmd}$0")) {
         Some(rel) => {
             let g = app.pal.green;
-            app.toast(ic::QUOTE, format!("{cmd} eingefügt in {rel}"), g, now);
+            app.toast(ic::QUOTE, trf!("{cmd} eingefügt in {rel}" | "{cmd} inserted into {rel}"), g, now);
         }
         None => {
-            app.shelf_ui.status = "Keine Datei geöffnet".into();
+            app.shelf_ui.status = tr!("Keine Datei geöffnet" | "No file open").into();
         }
     }
 }
@@ -359,9 +359,9 @@ fn empty_state(ui: &mut Ui, pal: &Palette) {
     ui.vertical_centered(|ui| {
         ui.label(egui::RichText::new(ic::BOOK).font(widgets::ui_font(46.0)).color(with_alpha(pal.accent, 160)));
         ui.add_space(10.0);
-        ui.label(egui::RichText::new("Dein Regal ist noch leer").font(widgets::display_font(22.0)).color(pal.bright));
+        ui.label(egui::RichText::new(tr!("Dein Regal ist noch leer" | "Your shelf is still empty")).font(widgets::display_font(22.0)).color(pal.bright));
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("Füge oben eine DOI oder arXiv-ID ein, suche nach einem Titel,\noder zieh PDFs einfach ins Fenster.").color(pal.dim));
+        ui.label(egui::RichText::new(tr!("Füge oben eine DOI oder arXiv-ID ein, suche nach einem Titel,\noder zieh PDFs einfach ins Fenster." | "Paste a DOI or arXiv ID above, search for a title,\nor simply drop PDFs into the window.")).color(pal.dim));
     });
 }
 
@@ -432,7 +432,7 @@ fn paper_card(ui: &mut Ui, p: &Paper, w: f32, selected: bool, pal: &Palette) -> 
         act = Some(CardAction::Select(key.clone()));
     }
     resp.context_menu(|ui| {
-        if ui.button(format!("{}  Zitieren", ic::QUOTE)).clicked() {
+        if ui.button(trf!("{}  Zitieren" | "{}  Cite", ic::QUOTE)).clicked() {
             act = Some(CardAction::Cite(key.clone()));
             ui.close();
         }
@@ -440,7 +440,7 @@ fn paper_card(ui: &mut Ui, p: &Paper, w: f32, selected: bool, pal: &Palette) -> 
             ui.ctx().copy_text(format!("\\citep{{{key}}}"));
             ui.close();
         }
-        if p.meta.pdf.is_some() && ui.button(format!("{}  PDF lesen", ic::FILE_PDF)).clicked() {
+        if p.meta.pdf.is_some() && ui.button(trf!("{}  PDF lesen" | "{}  Read PDF", ic::FILE_PDF)).clicked() {
             act = Some(CardAction::Open(key.clone()));
             ui.close();
         }
@@ -452,7 +452,7 @@ fn paper_card(ui: &mut Ui, p: &Paper, w: f32, selected: bool, pal: &Palette) -> 
             }
         }
         ui.separator();
-        if ui.button(egui::RichText::new(format!("{}  Entfernen", ic::TRASH)).color(pal.red)).clicked() {
+        if ui.button(egui::RichText::new(trf!("{}  Entfernen" | "{}  Remove", ic::TRASH)).color(pal.red)).clicked() {
             act = Some(CardAction::Delete(key.clone()));
             ui.close();
         }
@@ -474,11 +474,11 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
                 widgets::badge(ui, &p.entry.year(), pal.subtext);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button_sized(ui, ic::TIMES, "Schließen", pal, false, 26.0).clicked() {
+                if widgets::icon_button_sized(ui, ic::TIMES, tr!("Schließen" | "Close"), pal, false, 26.0).clicked() {
                     app.shelf_ui.selected = None;
                 }
                 let fav = p.meta.favorite;
-                if widgets::icon_button_sized(ui, if fav { ic::STAR } else { ic::STAR_O }, "Favorit", pal, fav, 26.0).clicked() {
+                if widgets::icon_button_sized(ui, if fav { ic::STAR } else { ic::STAR_O }, tr!("Favorit" | "Favorite"), pal, fav, 26.0).clicked() {
                     app.shelf.papers[idx].meta.favorite = !fav;
                     dirty = true;
                 }
@@ -495,14 +495,14 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
         ui.add_space(14.0);
 
         ui.horizontal_wrapped(|ui| {
-            if widgets::button(ui, ic::QUOTE, "Zitieren", pal, BtnKind::Primary).on_hover_text(format!("\\citep{{{key}}} an der Cursorposition einfügen")).clicked() {
+            if widgets::button(ui, ic::QUOTE, tr!("Zitieren" | "Cite"), pal, BtnKind::Primary).on_hover_text(trf!("\\citep{{{key}}} an der Cursorposition einfügen" | "Insert \\citep{{{key}}} at the cursor")).clicked() {
                 action = Some(CardAction::Cite(key.to_string()));
             }
             if p.meta.pdf.is_some() {
-                if widgets::button(ui, ic::FILE_PDF, "PDF lesen", pal, BtnKind::Secondary).clicked() {
+                if widgets::button(ui, ic::FILE_PDF, tr!("PDF lesen" | "Read PDF"), pal, BtnKind::Secondary).clicked() {
                     action = Some(CardAction::Open(key.to_string()));
                 }
-            } else if widgets::button(ui, ic::PAPERCLIP, "PDF anhängen", pal, BtnKind::Secondary).clicked() {
+            } else if widgets::button(ui, ic::PAPERCLIP, tr!("PDF anhängen" | "Attach PDF"), pal, BtnKind::Secondary).clicked() {
                 let tx = app.shelf_tx.clone();
                 let c = ui.ctx().clone();
                 let k = key.to_string();
@@ -522,7 +522,7 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
         ui.add_space(14.0);
 
         // key
-        widgets::section_label(ui, "Zitierschlüssel", pal);
+        widgets::section_label(ui, tr!("Zitierschlüssel" | "Citation key"), pal);
         ui.horizontal(|ui| {
             Frame::new().fill(pal.base).corner_radius(7).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
                 ui.label(egui::RichText::new(key).font(widgets::mono_font(13.0)).color(pal.bright));
@@ -530,13 +530,13 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
             if widgets::icon_button_sized(ui, ic::COPY, "\\citep{…} kopieren", pal, false, 28.0).clicked() {
                 ui.ctx().copy_text(format!("\\citep{{{key}}}"));
                 let g = pal.green;
-                app.toast(ic::COPY, "In die Zwischenablage kopiert", g, now);
+                app.toast(ic::COPY, tr!("In die Zwischenablage kopiert" | "Copied to clipboard"), g, now);
             }
         });
         ui.add_space(12.0);
 
         // status
-        widgets::section_label(ui, "Lesestatus", pal);
+        widgets::section_label(ui, tr!("Lesestatus" | "Reading status"), pal);
         ui.horizontal(|ui| {
             for s in [ReadStatus::Unread, ReadStatus::Reading, ReadStatus::Read] {
                 if widgets::chip(ui, ic::CIRCLE, s.label(), p.meta.status == s, status_color(s, pal), pal).clicked() {
@@ -548,11 +548,11 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
         ui.add_space(12.0);
 
         // tags
-        widgets::section_label(ui, "Schlagwörter", pal);
+        widgets::section_label(ui, tr!("Schlagwörter" | "Tags"), pal);
         ui.horizontal_wrapped(|ui| {
             let mut remove = None;
             for (ti, t) in p.meta.tags.iter().enumerate() {
-                if widgets::chip(ui, ic::TAG, &format!("{t}  {}", ic::TIMES), true, pal.magenta, pal).on_hover_text("Entfernen").clicked() {
+                if widgets::chip(ui, ic::TAG, &format!("{t}  {}", ic::TIMES), true, pal.magenta, pal).on_hover_text(tr!("Entfernen" | "Remove")).clicked() {
                     remove = Some(ti);
                 }
             }
@@ -560,7 +560,7 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
                 app.shelf.papers[idx].meta.tags.remove(ti);
                 dirty = true;
             }
-            let r = ui.add(egui::TextEdit::singleline(&mut app.shelf_ui.tags_edit).hint_text("+ Schlagwort").desired_width(120.0));
+            let r = ui.add(egui::TextEdit::singleline(&mut app.shelf_ui.tags_edit).hint_text(tr!("+ Schlagwort" | "+ tag")).desired_width(120.0));
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 let t = app.shelf_ui.tags_edit.trim().to_string();
                 if !t.is_empty() && !app.shelf.papers[idx].meta.tags.contains(&t) {
@@ -574,10 +574,10 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
         ui.add_space(12.0);
 
         // notes
-        widgets::section_label(ui, "Notizen", pal);
+        widgets::section_label(ui, tr!("Notizen" | "Notes"), pal);
         let r = ui.add(
             egui::TextEdit::multiline(&mut app.shelf.papers[idx].meta.notes)
-                .hint_text("Kernaussagen, Zitate, Seitenzahlen …")
+                .hint_text(tr!("Kernaussagen, Zitate, Seitenzahlen …" | "Key points, quotes, page numbers …"))
                 .desired_rows(6)
                 .desired_width(f32::INFINITY),
         );
@@ -603,10 +603,10 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
                 });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if widgets::button(ui, ic::PENCIL, "Bearbeiten", pal, BtnKind::Ghost).clicked() {
+                    if widgets::button(ui, ic::PENCIL, tr!("Bearbeiten" | "Edit"), pal, BtnKind::Ghost).clicked() {
                         app.shelf_ui.bib_edit = Some(p.entry.to_bibtex());
                     }
-                    if widgets::button(ui, ic::COPY, "Kopieren", pal, BtnKind::Ghost).clicked() {
+                    if widgets::button(ui, ic::COPY, tr!("Kopieren" | "Copy"), pal, BtnKind::Ghost).clicked() {
                         ui.ctx().copy_text(p.entry.to_bibtex());
                     }
                 });
@@ -616,7 +616,7 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
                 ui.add_space(6.0);
                 let src_c = src.clone();
                 ui.horizontal(|ui| {
-                    if widgets::button(ui, ic::CHECK, "Übernehmen", pal, BtnKind::Primary).clicked() {
+                    if widgets::button(ui, ic::CHECK, tr!("Übernehmen" | "Apply"), pal, BtnKind::Primary).clicked() {
                         if let Some(mut e) = bib::parse(&src_c).entries.into_iter().next() {
                             if e.key.is_empty() {
                                 e.key = key.to_string();
@@ -631,7 +631,7 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
                             dirty = true;
                         }
                     }
-                    if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
+                    if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
                         app.shelf_ui.bib_edit = None;
                     }
                 });
@@ -640,16 +640,16 @@ fn detail_panel(app: &mut App, ui: &mut Ui, pal: &Palette, key: &str, now: f64) 
         ui.add_space(22.0);
         if app.shelf_ui.confirm_delete.as_deref() == Some(key) {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Wirklich entfernen?").color(pal.red));
-                if widgets::button(ui, ic::TRASH, "Ja, entfernen", pal, BtnKind::Danger).clicked() {
+                ui.label(egui::RichText::new(tr!("Wirklich entfernen?" | "Really remove?")).color(pal.red));
+                if widgets::button(ui, ic::TRASH, tr!("Ja, entfernen" | "Yes, remove"), pal, BtnKind::Danger).clicked() {
                     action = Some(CardAction::Delete(key.to_string()));
                     app.shelf_ui.confirm_delete = None;
                 }
-                if widgets::button(ui, "", "Nein", pal, BtnKind::Ghost).clicked() {
+                if widgets::button(ui, "", tr!("Nein" | "No"), pal, BtnKind::Ghost).clicked() {
                     app.shelf_ui.confirm_delete = None;
                 }
             });
-        } else if widgets::button(ui, ic::TRASH, "Aus Bibliothek entfernen", pal, BtnKind::Danger).clicked() {
+        } else if widgets::button(ui, ic::TRASH, tr!("Aus Bibliothek entfernen" | "Remove from library"), pal, BtnKind::Danger).clicked() {
             app.shelf_ui.confirm_delete = Some(key.to_string());
         }
         ui.add_space(20.0);

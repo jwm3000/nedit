@@ -19,9 +19,9 @@ pub enum ReadStatus {
 impl ReadStatus {
     pub fn label(self) -> &'static str {
         match self {
-            ReadStatus::Unread => "Ungelesen",
-            ReadStatus::Reading => "In Arbeit",
-            ReadStatus::Read => "Gelesen",
+            ReadStatus::Unread => tr!("Ungelesen" | "Unread"),
+            ReadStatus::Reading => tr!("In Arbeit" | "Reading"),
+            ReadStatus::Read => tr!("Gelesen" | "Read"),
         }
     }
 }
@@ -234,15 +234,15 @@ fn http_get(url: &str, accept: &str) -> Result<String, String> {
         .header("Accept", accept)
         .header("User-Agent", "nEdit/0.1 (LaTeX editor; mailto:nedit@localhost)")
         .call()
-        .map_err(|e| format!("Netzwerkfehler: {e}"))?;
-    resp.body_mut().read_to_string().map_err(|e| format!("Antwort unlesbar: {e}"))
+        .map_err(|e| trf!("Netzwerkfehler: {e}" | "Network error: {e}"))?;
+    resp.body_mut().read_to_string().map_err(|e| trf!("Antwort unlesbar: {e}" | "Unreadable response: {e}"))
 }
 
 pub fn fetch_doi(doi: &str) -> Result<BibEntry, String> {
     let url = format!("https://doi.org/{}", doi.trim());
     let txt = http_get(&url, "application/x-bibtex; charset=utf-8")?;
     let mut f = bib::parse(&txt);
-    let mut e = f.entries.pop().ok_or_else(|| "Kein BibTeX für diese DOI gefunden".to_string())?;
+    let mut e = f.entries.pop().ok_or_else(|| tr!("Kein BibTeX für diese DOI gefunden" | "No BibTeX found for this DOI").to_string())?;
     if e.get("doi").is_none() {
         e.set("doi", doi);
     }
@@ -281,7 +281,7 @@ pub fn search_crossref(q: &str) -> Result<Vec<SearchHit>, String> {
             };
             SearchHit {
                 doi: it["DOI"].as_str().unwrap_or("").to_string(),
-                title: it["title"][0].as_str().unwrap_or("(ohne Titel)").to_string(),
+                title: it["title"][0].as_str().unwrap_or(tr!("(ohne Titel)" | "(untitled)")).to_string(),
                 authors,
                 year: it["issued"]["date-parts"][0][0].as_i64().map(|y| y.to_string()).unwrap_or_default(),
                 venue: it["container-title"][0].as_str().or(it["publisher"].as_str()).unwrap_or("").to_string(),
@@ -295,14 +295,14 @@ pub fn run_query(input: String, tx: Sender<ShelfMsg>, ctx: egui::Context) {
     std::thread::spawn(move || {
         let msg = match classify(&input) {
             Query::Doi(d) => {
-                let _ = tx.send(ShelfMsg::Status(format!("Lade DOI {d} …")));
+                let _ = tx.send(ShelfMsg::Status(trf!("Lade DOI {d} …" | "Loading DOI {d} …")));
                 match fetch_doi(&d) {
                     Ok(entry) => ShelfMsg::Fetched { entry, pdf: None },
                     Err(e) => ShelfMsg::Error(e),
                 }
             }
             Query::Arxiv(id) => {
-                let _ = tx.send(ShelfMsg::Status(format!("Lade arXiv:{id} …")));
+                let _ = tx.send(ShelfMsg::Status(trf!("Lade arXiv:{id} …" | "Loading arXiv:{id} …")));
                 match fetch_doi(&format!("10.48550/arXiv.{id}")) {
                     Ok(mut entry) => {
                         if entry.get("eprint").is_none() {
@@ -315,7 +315,7 @@ pub fn run_query(input: String, tx: Sender<ShelfMsg>, ctx: egui::Context) {
                 }
             }
             Query::Search(q) => {
-                let _ = tx.send(ShelfMsg::Status("Suche bei Crossref …".into()));
+                let _ = tx.send(ShelfMsg::Status(tr!("Suche bei Crossref …" | "Searching Crossref …").into()));
                 match search_crossref(&q) {
                     Ok(h) => ShelfMsg::SearchResults(h),
                     Err(e) => ShelfMsg::Error(e),
@@ -333,7 +333,7 @@ pub fn import_pdfs(files: Vec<PathBuf>, tx: Sender<ShelfMsg>, ctx: egui::Context
     std::thread::spawn(move || {
         for f in files {
             let name = f.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            let _ = tx.send(ShelfMsg::Status(format!("Analysiere {name} …")));
+            let _ = tx.send(ShelfMsg::Status(trf!("Analysiere {name} …" | "Analyzing {name} …")));
             ctx.request_repaint();
             let text = crate::platform::cmd("pdftotext")
                 .args(["-l", "2", "-q"])

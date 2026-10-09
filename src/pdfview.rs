@@ -281,7 +281,7 @@ impl PdfViewer {
         let mut resp = ViewerResponse { double_click: None };
         let Some(doc) = self.doc.clone() else {
             let r = ui.available_rect_before_wrap();
-            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Noch kein PDF – Strg+Enter zum Kompilieren", egui::FontId::proportional(14.0), pal.dim);
+            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, tr!("Noch kein PDF – Strg+Enter zum Kompilieren" | "No PDF yet – Ctrl+Enter to compile"), egui::FontId::proportional(14.0), pal.dim);
             ui.allocate_rect(r, Sense::hover());
             return resp;
         };

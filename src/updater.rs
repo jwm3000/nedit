@@ -84,10 +84,10 @@ fn fetch_latest() -> Result<Release, String> {
         .header("User-Agent", "nEdit-updater")
         .header("Accept", "application/vnd.github+json")
         .call()
-        .map_err(|e| format!("GitHub nicht erreichbar: {e}"))?;
+        .map_err(|e| trf!("GitHub nicht erreichbar: {e}" | "GitHub unreachable: {e}"))?;
     let txt = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
-    let tag = v["tag_name"].as_str().ok_or("Keine Releases gefunden")?.to_string();
+    let tag = v["tag_name"].as_str().ok_or(tr!("Keine Releases gefunden" | "No releases found"))?.to_string();
     let asset_url = asset_name().and_then(|name| {
         v["assets"].as_array()?.iter().find(|a| a["name"].as_str() == Some(name)).and_then(|a| a["browser_download_url"].as_str()).map(String::from)
     });
@@ -101,9 +101,9 @@ fn fetch_latest() -> Result<Release, String> {
 
 /// Put the new binary in place of the running one.
 fn replace_exe(bytes: &[u8]) -> Result<(), String> {
-    let exe = exe_path().ok_or("Programmpfad unbekannt")?;
+    let exe = exe_path().ok_or(tr!("Programmpfad unbekannt" | "Program path unknown"))?;
     let tmp = exe.with_extension("update-new");
-    std::fs::write(&tmp, bytes).map_err(|e| format!("Kann nicht nach {} schreiben: {e}", tmp.display()))?;
+    std::fs::write(&tmp, bytes).map_err(|e| trf!("Kann nicht nach {} schreiben: {e}" | "Cannot write to {}: {e}", tmp.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -118,7 +118,7 @@ fn replace_exe(bytes: &[u8]) -> Result<(), String> {
     }
     std::fs::rename(&tmp, &exe).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("Austauschen fehlgeschlagen: {e}")
+        trf!("Austauschen fehlgeschlagen: {e}" | "Replacing failed: {e}")
     })
 }
 
@@ -148,7 +148,7 @@ pub fn cleanup() {
 
 /// Start the (new) executable as a detached process; the caller then closes the window.
 pub fn restart() -> Result<(), String> {
-    let exe = exe_path().ok_or("Programmpfad unbekannt")?;
+    let exe = exe_path().ok_or(tr!("Programmpfad unbekannt" | "Program path unknown"))?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(unix)]
@@ -156,12 +156,12 @@ pub fn restart() -> Result<(), String> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0); // survive the parent closing
     }
-    cmd.spawn().map(|_| ()).map_err(|e| format!("Neustart fehlgeschlagen ({}): {e}", exe.display()))
+    cmd.spawn().map(|_| ()).map_err(|e| trf!("Neustart fehlgeschlagen ({}): {e}" | "Restart failed ({}): {e}", exe.display()))
 }
 
 /// Download a release asset; `progress(done, total)` is called while reading.
 fn download(url: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
-    let mut resp = agent().get(url).header("User-Agent", "nEdit-updater").call().map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
+    let mut resp = agent().get(url).header("User-Agent", "nEdit-updater").call().map_err(|e| trf!("Download fehlgeschlagen: {e}" | "Download failed: {e}"))?;
     let total: u64 = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
     let mut reader = resp.body_mut().with_config().limit(500 * 1024 * 1024).reader();
     let mut bytes = Vec::with_capacity(total as usize);
@@ -175,7 +175,7 @@ fn download(url: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
         progress(bytes.len() as u64, total);
     }
     if bytes.len() < 1024 * 1024 || (total > 0 && bytes.len() as u64 != total) {
-        return Err("Download unvollständig".into());
+        return Err(tr!("Download unvollständig" | "Download incomplete").into());
     }
     Ok(bytes)
 }
@@ -183,14 +183,14 @@ fn download(url: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
 /// `nedit --update`: check and install from the command line.
 pub fn cli_update() -> Result<String, String> {
     if let Some(src) = source_checkout() {
-        return Err(format!("nEdit läuft aus dem Quellcode – aktualisieren mit: cd {} && git pull && ./install.sh", src.display()));
+        return Err(trf!("nEdit läuft aus dem Quellcode – aktualisieren mit: cd {} && git pull && ./install.sh" | "nEdit runs from source – update with: cd {} && git pull && ./install.sh", src.display()));
     }
     let rel = fetch_latest()?;
     if !is_newer(&rel.tag) {
-        return Ok(format!("nEdit {VERSION} ist aktuell (neuestes Release: {})", rel.tag));
+        return Ok(trf!("nEdit {VERSION} ist aktuell (neuestes Release: {})" | "nEdit {VERSION} is up to date (latest release: {})", rel.tag));
     }
-    let url = rel.asset_url.ok_or("Für diese Plattform gibt es kein fertiges Programm")?;
-    eprintln!("Lade {} …", rel.tag);
+    let url = rel.asset_url.ok_or(tr!("Für diese Plattform gibt es kein fertiges Programm" | "There is no prebuilt program for this platform"))?;
+    eprintln!("{}", trf!("Lade {} …" | "Downloading {} …", rel.tag));
     let bytes = download(&url, &|d, t| {
         if t > 0 {
             eprint!("\r  {:>5.1} / {:.1} MB", d as f64 / 1e6, t as f64 / 1e6);
@@ -198,7 +198,7 @@ pub fn cli_update() -> Result<String, String> {
     })?;
     eprintln!();
     replace_exe(&bytes)?;
-    Ok(format!("nEdit wurde von {VERSION} auf {} aktualisiert", rel.tag))
+    Ok(trf!("nEdit wurde von {VERSION} auf {} aktualisiert" | "nEdit was updated from {VERSION} to {}", rel.tag))
 }
 
 impl Updater {
@@ -217,7 +217,7 @@ impl Updater {
         }
         self.checking = true;
         if manual {
-            self.status = "Suche nach Updates …".into();
+            self.status = tr!("Suche nach Updates …" | "Checking for updates …").into();
         }
         let tx = self.channel();
         let ctx = ctx.clone();
@@ -231,12 +231,12 @@ impl Updater {
     pub fn install(&mut self, ctx: &egui::Context) {
         let Some(rel) = self.available.clone() else { return };
         let Some(url) = rel.asset_url.clone() else {
-            self.status = "Für diese Plattform gibt es kein fertiges Programm – bitte aus dem Quellcode bauen.".into();
+            self.status = tr!("Für diese Plattform gibt es kein fertiges Programm – bitte aus dem Quellcode bauen." | "There is no prebuilt program for this platform – please build from source.").into();
             return;
         };
         self.installing = true;
         self.progress = Some((0, 0));
-        self.status = format!("Lade {} …", rel.tag);
+        self.status = trf!("Lade {} …" | "Downloading {} …", rel.tag);
         let tx = self.channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -260,7 +260,7 @@ impl Updater {
                     self.checking = false;
                     match result {
                         Ok(Some(r)) => {
-                            self.status = format!("Version {} ist verfügbar", r.tag);
+                            self.status = trf!("Version {} ist verfügbar" | "Version {} is available", r.tag);
                             announce = Some(r.tag.clone());
                             self.available = Some(r);
                             self.last_check_ok = true;
@@ -268,7 +268,7 @@ impl Updater {
                         Ok(None) => {
                             self.last_check_ok = true;
                             if manual {
-                                self.status = format!("nEdit {VERSION} ist aktuell ✓");
+                                self.status = trf!("nEdit {VERSION} ist aktuell ✓" | "nEdit {VERSION} is up to date ✓");
                             }
                         }
                         Err(e) => {
@@ -285,7 +285,7 @@ impl Updater {
                     match r {
                         Ok(()) => {
                             self.installed = true;
-                            self.status = "Update installiert – nEdit neu starten, um es zu verwenden.".into();
+                            self.status = tr!("Update installiert – nEdit neu starten, um es zu verwenden." | "Update installed – restart nEdit to use it.").into();
                         }
                         Err(e) => self.status = e,
                     }

@@ -30,11 +30,17 @@ pub struct Settings {
     pub update_check: bool,
     /// Editor input: standard or vim keybindings (code mode).
     pub input_vim: bool,
+    /// UI language: false = Deutsch (default), true = English.
+    pub lang_en: bool,
+    /// PDF preview next to the editor (standard view).
+    pub show_pdf: bool,
+    /// Git diff: side by side instead of inline.
+    pub diff_split: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false }
     }
 }
 
@@ -222,12 +228,17 @@ pub struct App {
     pub close_requested: bool,
     pub vim: crate::vim::VimState,
     pub about_open: bool,
+    pub quick: Option<crate::quickopen::QuickOpen>,
+    pub shift_tap: crate::quickopen::ShiftTap,
+    /// Most recently opened files (newest first).
+    pub recent: Vec<String>,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         crate::fonts::install(&cc.egui_ctx);
         let settings = Settings::load();
+        crate::i18n::set_english(settings.lang_en || std::env::var("NEDIT_LANG").is_ok_and(|l| l == "en"));
         let pal = load_palette(&settings);
         let project = settings
             .last_project
@@ -235,7 +246,7 @@ impl App {
             .filter(|p| p.join(".nedit/project.json").exists() && p.starts_with(project::projects_dir()))
             .and_then(|p| Project::open(&p).ok())
             .or_else(|| project::list_projects().first().and_then(|p| Project::open(p).ok()))
-            .unwrap_or_else(|| Project::create("Masterarbeit", "").expect("Projektordner kann nicht angelegt werden"));
+            .unwrap_or_else(|| Project::create("Masterarbeit", "").expect(tr!("Projektordner kann nicht angelegt werden" | "Cannot create project folder")));
         let shelf = Shelf::load(&project.root);
         let (tx, rx) = channel();
         let mut app = App {
@@ -292,6 +303,9 @@ impl App {
             close_requested: false,
             vim: Default::default(),
             about_open: false,
+            quick: None,
+            shift_tap: Default::default(),
+            recent: vec![],
         };
         crate::updater::cleanup();
         app.apply_style(&cc.egui_ctx);
@@ -426,7 +440,7 @@ impl App {
             Ok(affected) => {
                 self.sync_buffers_with_disk(&affected);
                 let g = self.pal.green;
-                self.toast(ic::UNDO, format!("{} Datei(en) zurückgesetzt", affected.len()), g, now);
+                self.toast(ic::UNDO, trf!("{} Datei(en) zurückgesetzt" | "{} file(s) reverted", affected.len()), g, now);
             }
             Err(e) => {
                 let r = self.pal.red;
@@ -450,7 +464,7 @@ impl App {
         match self.git.init(&root) {
             Ok(()) => {
                 let g = self.pal.green;
-                self.toast(ic::GIT, "Git-Repository angelegt – erste Version gesichert", g, now);
+                self.toast(ic::GIT, tr!("Git-Repository angelegt – erste Version gesichert" | "Git repository created – first version saved"), g, now);
             }
             Err(e) => {
                 let r = self.pal.red;
@@ -497,6 +511,9 @@ impl App {
                 Err(_) => return false,
             }
         }
+        self.recent.retain(|r| r != rel);
+        self.recent.insert(0, rel.to_string());
+        self.recent.truncate(20);
         let ws = self.ws_mut(t);
         if !ws.tabs.iter().any(|x| x == rel) {
             ws.tabs.push(rel.to_string());
@@ -611,9 +628,9 @@ impl App {
                     }
                 }
                 if errors > 0 {
-                    let name = if t == Tab::Slides { "Präsentation" } else { "Masterarbeit" };
+                    let name = if t == Tab::Slides { tr!("Präsentation" | "Presentation") } else { tr!("Masterarbeit" | "Thesis") };
                     let red = self.pal.red;
-                    self.toast(ic::ERROR, format!("{name}: {errors} Fehler beim Kompilieren"), red, now);
+                    self.toast(ic::ERROR, trf!("{name}: {errors} Fehler beim Kompilieren" | "{name}: {errors} compile error(s)"), red, now);
                 }
                 if self.ws(t).queued {
                     self.ws_mut(t).queued = false;
@@ -704,19 +721,19 @@ impl App {
                     self.shelf_ui.results.clear();
                     self.shelf_ui.selected = Some(key.clone());
                     let green = self.pal.green;
-                    self.toast(ic::BOOK, format!("Hinzugefügt: {} ({key})", truncate(&title, 48)), green, now);
+                    self.toast(ic::BOOK, trf!("Hinzugefügt: {} ({key})" | "Added: {} ({key})", truncate(&title, 48)), green, now);
                     self.after_shelf_change();
                 }
                 ShelfMsg::SearchResults(r) => {
                     self.shelf_ui.busy = false;
-                    self.shelf_ui.status = if r.is_empty() { "Keine Treffer".into() } else { String::new() };
+                    self.shelf_ui.status = if r.is_empty() { tr!("Keine Treffer" | "No results").into() } else { String::new() };
                     self.shelf_ui.results = r;
                 }
                 ShelfMsg::Attach { key, path } => {
                     if let Some(i) = self.shelf.papers.iter().position(|p| p.entry.key == key) {
                         self.shelf.attach_pdf(i, &path);
                         let g = self.pal.green;
-                        self.toast(ic::PAPERCLIP, "PDF angehängt", g, now);
+                        self.toast(ic::PAPERCLIP, tr!("PDF angehängt" | "PDF attached"), g, now);
                     }
                 }
                 ShelfMsg::Error(e) => {
@@ -780,7 +797,7 @@ impl App {
         }
         if let Some(tag) = self.updater.poll() {
             let a = self.pal.accent;
-            self.toast(ic::DOWNLOAD, format!("nEdit {tag} ist verfügbar – oben rechts aktualisieren"), a, now);
+            self.toast(ic::DOWNLOAD, trf!("nEdit {tag} ist verfügbar – oben rechts aktualisieren" | "nEdit {tag} is available – update at the top right"), a, now);
         }
         if self.updater.installing || self.updater.checking {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
@@ -821,7 +838,7 @@ impl App {
                     self.apply_style(ctx);
                     let a = self.pal.accent;
                     let name = self.pal.name.clone();
-                    self.toast(ic::BRUSH, format!("Theme: {name}"), a, now);
+                    self.toast(ic::BRUSH, trf!("Theme: {name}" | "Theme: {name}"), a, now);
                 }
             }
             // pick up files created/removed outside nEdit
@@ -941,7 +958,7 @@ impl App {
             let dir = self.tree_ui.hover_dir.clone().unwrap_or_else(|| self.target_dir());
             let n = self.import_files(&dropped, &dir);
             let g = self.pal.green;
-            self.toast(ic::DOWNLOAD, format!("{n} Datei(en) nach /{dir} kopiert"), g, now);
+            self.toast(ic::DOWNLOAD, trf!("{n} Datei(en) nach /{dir} kopiert" | "{n} file(s) copied to /{dir}"), g, now);
             return;
         }
         let pdfs: Vec<PathBuf> = dropped.iter().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))).cloned().collect();
@@ -969,7 +986,7 @@ impl App {
                 };
                 self.insert_snippet(t, &snip);
                 let g = self.pal.green;
-                self.toast(ic::IMAGE, format!("Abbildung {name} eingefügt"), g, now);
+                self.toast(ic::IMAGE, trf!("Abbildung {name} eingefügt" | "Figure {name} inserted"), g, now);
             }
         }
         self.refresh_tree();
@@ -1043,12 +1060,14 @@ impl eframe::App for App {
             crate::workspace::present_ui(self, ui, now);
             return;
         }
+        self.quick_shortcut(&ctx, now);
         self.global_keys(&ctx, now);
         let pal = self.pal.clone();
         if self.focus && self.tab == Tab::Thesis {
             crate::workspace::focus_ui(self, ui, now);
             self.dialogs(&ctx, &pal, now);
             self.about_window(&ctx, &pal);
+            self.quick_ui(&ctx, now);
             self.draw_toasts(&ctx, &pal, now);
             return;
         }
@@ -1067,6 +1086,7 @@ impl eframe::App for App {
         }
         self.dialogs(&ctx, &pal, now);
         self.about_window(&ctx, &pal);
+        self.quick_ui(&ctx, now);
         self.draw_toasts(&ctx, &pal, now);
     }
 }
@@ -1098,7 +1118,7 @@ impl App {
                     let resp = ui.add(egui::Button::new(egui::RichText::new(format!("{}   {name}   {}", ic::GRADUATION, ic::CHEVRON_DOWN)).font(widgets::ui_font(13.5)).color(pal.text)).fill(pal.surface).corner_radius(8));
                     egui::Popup::menu(&resp).show(|ui| {
                         ui.set_min_width(240.0);
-                        widgets::section_label(ui, "Projekte", pal);
+                        widgets::section_label(ui, tr!("Projekte" | "Projects"), pal);
                         for p in project::list_projects() {
                             let n = p.file_name().unwrap().to_string_lossy().to_string();
                             let cur = p == self.project.root;
@@ -1113,10 +1133,10 @@ impl App {
                             }
                         }
                         ui.separator();
-                        if ui.button(format!("{}  Neues Projekt …", ic::PLUS)).clicked() {
+                        if ui.button(trf!("{}  Neues Projekt …" | "{}  New project …", ic::PLUS)).clicked() {
                             self.dialog = Some(Dialog::NewProject { name: String::new() });
                         }
-                        if ui.button(format!("{}  Ordner öffnen", ic::FOLDER_OPEN)).clicked() {
+                        if ui.button(trf!("{}  Ordner öffnen" | "{}  Open folder", ic::FOLDER_OPEN)).clicked() {
                             crate::platform::open_external(&self.project.root);
                         }
                     });
@@ -1137,9 +1157,9 @@ impl App {
                     };
                     let n_papers = self.shelf.papers.len();
                     let items = [
-                        (ic::FILE_TEXT, "Masterarbeit", None),
-                        (ic::TV, "Präsentation", None),
-                        (ic::BOOK, "Bibliothek", Some(n_papers.to_string())),
+                        (ic::FILE_TEXT, tr!("Masterarbeit" | "Thesis"), None),
+                        (ic::TV, tr!("Präsentation" | "Presentation"), None),
+                        (ic::BOOK, tr!("Bibliothek" | "Library"), Some(n_papers.to_string())),
                     ];
                     if widgets::segmented(ui, "maintabs", &items, &mut sel, pal) {
                         self.tab = [Tab::Thesis, Tab::Slides, Tab::Shelf][sel];
@@ -1148,12 +1168,22 @@ impl App {
                     // right side
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // settings
-                        let resp = widgets::icon_button(ui, ic::COG, "Einstellungen", pal, false);
+                        let resp = widgets::icon_button(ui, ic::COG, tr!("Einstellungen" | "Settings"), pal, false);
                         egui::Popup::menu(&resp).show(|ui| {
                             ui.set_min_width(260.0);
+                            widgets::section_label(ui, tr!("Sprache" | "Language"), pal);
+                            ui.horizontal(|ui| {
+                                let mut ch = false;
+                                ch |= ui.selectable_value(&mut self.settings.lang_en, false, "Deutsch").changed();
+                                ch |= ui.selectable_value(&mut self.settings.lang_en, true, "English").changed();
+                                if ch {
+                                    crate::i18n::set_english(self.settings.lang_en);
+                                    self.settings.save();
+                                }
+                            });
                             widgets::section_label(ui, "Editor", pal);
                             ui.horizontal(|ui| {
-                                ui.label("Eingabe");
+                                ui.label(tr!("Eingabe" | "Input"));
                                 let mut ch = false;
                                 ch |= ui.selectable_value(&mut self.settings.input_vim, false, "Standard").changed();
                                 ch |= ui.selectable_value(&mut self.settings.input_vim, true, format!("{}  Vim", ic::TERMINAL)).changed();
@@ -1163,58 +1193,58 @@ impl App {
                                 }
                             });
                             if self.settings.input_vim {
-                                ui.label(egui::RichText::new("Vim gilt im Code-Modus; im visuellen Modus bleibt die Standardeingabe.").font(widgets::ui_font(11.0)).color(pal.dim));
+                                ui.label(egui::RichText::new(tr!("Vim gilt im Code-Modus; im visuellen Modus bleibt die Standardeingabe." | "Vim applies in code mode; visual mode keeps the standard input.")).font(widgets::ui_font(11.0)).color(pal.dim));
                             }
                             ui.horizontal(|ui| {
-                                ui.label("Schriftgröße");
+                                ui.label(tr!("Schriftgröße" | "Font size"));
                                 if widgets::fancy_slider(ui, &mut self.settings.font_size, 10.0, 24.0, 0.5, "pt", pal).changed() {
                                     self.settings.save();
                                 }
                             });
-                            if ui.checkbox(&mut self.settings.auto_compile, "Automatisch kompilieren").changed() {
+                            if ui.checkbox(&mut self.settings.auto_compile, tr!("Automatisch kompilieren" | "Compile automatically")).changed() {
                                 self.settings.save();
                             }
-                            if ui.checkbox(&mut self.settings.dark_pdf, "PDF im Dark-Mode abdunkeln").changed() {
+                            if ui.checkbox(&mut self.settings.dark_pdf, tr!("PDF im Dark-Mode abdunkeln" | "Dim PDF in dark mode")).changed() {
                                 self.settings.save();
                                 self.thesis.viewer.dark_pages = self.settings.dark_pdf && pal.dark;
                             }
                             widgets::section_label(ui, "Compiler", pal);
                             let mut changed = false;
                             ui.horizontal(|ui| {
-                                ui.label("Arbeit");
+                                ui.label(tr!("Arbeit" | "Thesis"));
                                 for e in ["pdflatex", "xelatex", "lualatex"] {
                                     changed |= ui.selectable_value(&mut self.project.config.engine, e.to_string(), e).changed();
                                 }
                             });
                             ui.horizontal(|ui| {
-                                ui.label("Folien");
+                                ui.label(tr!("Folien" | "Slides"));
                                 for e in ["pdflatex", "xelatex", "lualatex"] {
                                     changed |= ui.selectable_value(&mut self.project.config.slides_engine, e.to_string(), e).changed();
                                 }
                             });
-                            if ui.button(format!("{}  Über nEdit …", ic::GRADUATION)).clicked() {
+                            if ui.button(trf!("{}  Über nEdit …" | "{}  About nEdit …", ic::GRADUATION)).clicked() {
                                 self.about_open = true;
                                 ui.close();
                             }
                             widgets::section_label(ui, "Updates", pal);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Version {}", crate::updater::VERSION)).color(pal.subtext));
-                                if ui.add_enabled(!self.updater.checking, egui::Button::new(format!("{}  Nach Updates suchen", ic::REFRESH))).clicked() {
+                                if ui.add_enabled(!self.updater.checking, egui::Button::new(trf!("{}  Nach Updates suchen" | "{}  Check for updates", ic::REFRESH))).clicked() {
                                     self.updater.check(true, &ctx);
                                 }
                             });
-                            if ui.checkbox(&mut self.settings.update_check, "Beim Start nach Updates suchen").changed() {
+                            if ui.checkbox(&mut self.settings.update_check, tr!("Beim Start nach Updates suchen" | "Check for updates on start")).changed() {
                                 self.settings.save();
                             }
                             if !self.updater.status.is_empty() {
                                 ui.label(egui::RichText::new(&self.updater.status).font(widgets::ui_font(11.5)).color(pal.dim));
                             }
-                            if self.updater.available.is_some() && ui.button(format!("{}  Update anzeigen", ic::DOWNLOAD)).clicked() {
+                            if self.updater.available.is_some() && ui.button(trf!("{}  Update anzeigen" | "{}  Show update", ic::DOWNLOAD)).clicked() {
                                 self.dialog = Some(Dialog::Update);
                             }
-                            widgets::section_label(ui, "Präsentation", pal);
+                            widgets::section_label(ui, tr!("Präsentation" | "Presentation"), pal);
                             ui.horizontal(|ui| {
-                                ui.label("Redezeit");
+                                ui.label(tr!("Redezeit" | "Talk length"));
                                 changed |= ui.add(egui::DragValue::new(&mut self.project.config.talk_minutes).range(1..=120).suffix(" min")).changed();
                             });
                             if changed {
@@ -1228,7 +1258,7 @@ impl App {
                             widgets::section_label(ui, "Theme", pal);
                             let follow = self.settings.theme.is_none();
                             let cur = theme::current_omarchy_name().map(|n| theme::pretty_name(&n)).unwrap_or_default();
-                            if ui.selectable_label(follow, format!("{}  Omarchy folgen  ·  {cur}", ic::MAGIC)).clicked() {
+                            if ui.selectable_label(follow, trf!("{}  Omarchy folgen  ·  {cur}" | "{}  Follow Omarchy  ·  {cur}", ic::MAGIC)).clicked() {
                                 self.set_theme(None, &ctx);
                             }
                             if ui.selectable_label(self.settings.theme.as_deref() == Some("nedit"), format!("{}  nEdit Ink", ic::MOON)).clicked() {
@@ -1257,7 +1287,7 @@ impl App {
                             });
                         });
                         if self.updater.installed {
-                            if widgets::button(ui, ic::REFRESH, "Neu starten", pal, BtnKind::Primary).on_hover_text("Update installiert – nEdit neu starten").clicked() {
+                            if widgets::button(ui, ic::REFRESH, tr!("Neu starten" | "Restart"), pal, BtnKind::Primary).on_hover_text(tr!("Update installiert – nEdit neu starten" | "Update installed – restart nEdit")).clicked() {
                                 self.save_all();
                                 match crate::updater::restart() {
                                     Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -1269,7 +1299,7 @@ impl App {
                             }
                         } else if let Some(rel) = &self.updater.available {
                             let label = format!("Update {}", rel.tag);
-                            if widgets::button(ui, ic::DOWNLOAD, &label, pal, BtnKind::Secondary).on_hover_text("Neue nEdit-Version verfügbar").clicked() {
+                            if widgets::button(ui, ic::DOWNLOAD, &label, pal, BtnKind::Secondary).on_hover_text(tr!("Neue nEdit-Version verfügbar" | "New nEdit version available")).clicked() {
                                 self.dialog = Some(Dialog::Update);
                             }
                         }
@@ -1277,17 +1307,17 @@ impl App {
                         if self.tab != Tab::Shelf {
                             let t = self.tab;
                             let running = self.ws(t).job.is_some();
-                            let label = if running { "Kompiliert …" } else { "Kompilieren" };
+                            let label = if running { tr!("Kompiliert …" | "Compiling …") } else { tr!("Kompilieren" | "Compile") };
                             let r = widgets::button(ui, if running { "" } else { ic::PLAY }, label, pal, BtnKind::Primary);
                             if running {
                                 widgets::draw_spinner(ui, pos2(r.rect.min.x + 18.0, r.rect.center().y), 6.0, pal.on_accent);
                             }
-                            if r.on_hover_text("Strg+Enter").clicked() {
+                            if r.on_hover_text(tr!("Strg+Enter" | "Ctrl+Enter")).clicked() {
                                 self.compile(t, &ctx);
                             }
                             if t == Tab::Slides {
                                 ui.add_space(4.0);
-                                if widgets::button(ui, ic::PLAY, "Präsentieren", pal, BtnKind::Secondary).on_hover_text("F5").clicked() {
+                                if widgets::button(ui, ic::PLAY, tr!("Präsentieren" | "Present"), pal, BtnKind::Secondary).on_hover_text("F5").clicked() {
                                     crate::workspace::start_presentation(self, &ctx, now);
                                 }
                             }
@@ -1312,9 +1342,9 @@ impl App {
                         if let Some(i) = self.buffer_idx(&rel) {
                             let b = &self.buffers[i];
                             ui.label(small(format!("{}  {}", ic::FILE_TEXT, b.rel), pal.subtext));
-                            ui.label(small(format!("Zeile {}, Spalte {}", b.line, b.col), pal.dim));
+                            ui.label(small(trf!("Zeile {}, Spalte {}" | "Line {}, column {}", b.line, b.col), pal.dim));
                             if b.dirty() {
-                                ui.label(small(format!("{} ungespeichert", ic::CIRCLE), pal.yellow));
+                                ui.label(small(trf!("{} ungespeichert" | "{} unsaved", ic::CIRCLE), pal.yellow));
                             }
                         }
                     }
@@ -1335,13 +1365,13 @@ impl App {
                         }
                     }
                     if doc == Tab::Thesis {
-                        ui.label(small(format!("{} Wörter", fmt_thousands(self.word_count)), pal.dim));
+                        ui.label(small(trf!("{} Wörter" | "{} words", fmt_thousands(self.word_count)), pal.dim));
                     }
                     if self.git.is_repo {
                         let n = self.git.changes.len();
-                        let txt = if n == 0 { format!("{}  {}  ✓", ic::BRANCH, self.git.branch) } else { format!("{}  {}  ·  {n} geändert", ic::BRANCH, self.git.branch) };
+                        let txt = if n == 0 { format!("{}  {}  ✓", ic::BRANCH, self.git.branch) } else { trf!("{}  {}  ·  {n} geändert" | "{}  {}  ·  {n} changed", ic::BRANCH, self.git.branch) };
                         let col = if n == 0 { pal.dim } else { widgets::git_color('M', pal) };
-                        let r = ui.add(egui::Label::new(small(txt, col)).sense(egui::Sense::click())).on_hover_text("Git-Panel öffnen");
+                        let r = ui.add(egui::Label::new(small(txt, col)).sense(egui::Sense::click())).on_hover_text(tr!("Git-Panel öffnen" | "Open Git panel"));
                         if r.clicked() {
                             self.side = SideMode::Git;
                             if self.tab == Tab::Shelf {
@@ -1354,13 +1384,13 @@ impl App {
                         ui.add_space(10.0);
                         let ws = self.ws(doc);
                         if ws.job.is_some() {
-                            ui.label(small(format!("{} Kompiliere …", ic::REFRESH), pal.accent));
+                            ui.label(small(trf!("{} Kompiliere …" | "{} Compiling …", ic::REFRESH), pal.accent));
                         } else if let Some(ok) = ws.last_ok {
                             let (e, w) = (ws.errors(), ws.warnings());
                             if ok {
-                                ui.label(small(format!("{} Kompiliert in {:.1} s", ic::CHECK_CIRCLE, ws.last_secs), pal.green));
+                                ui.label(small(trf!("{} Kompiliert in {:.1} s" | "{} Compiled in {:.1} s", ic::CHECK_CIRCLE, ws.last_secs), pal.green));
                             } else {
-                                ui.label(small(format!("{} {e} Fehler", ic::ERROR), pal.red));
+                                ui.label(small(trf!("{} {e} Fehler" | "{} {e} error(s)", ic::ERROR), pal.red));
                             }
                             if w > 0 {
                                 ui.label(small(format!("{} {w}", ic::WARN), pal.yellow));
@@ -1379,28 +1409,28 @@ impl App {
             ui.set_width(380.0);
             match dialog {
                 Dialog::Delete { rel } => {
-                    ui.label(egui::RichText::new("Löschen?").font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(tr!("Löschen?" | "Delete?")).font(widgets::display_font(20.0)).color(pal.bright));
                     ui.add_space(6.0);
-                    ui.label(format!("„{rel}“ wird endgültig gelöscht."));
+                    ui.label(trf!("„{rel}“ wird endgültig gelöscht." | "“{rel}” will be deleted permanently."));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if widgets::button(ui, ic::TRASH, "Löschen", pal, BtnKind::Danger).clicked() {
+                        if widgets::button(ui, ic::TRASH, tr!("Löschen" | "Delete"), pal, BtnKind::Danger).clicked() {
                             let rel = rel.clone();
                             action = Some(Box::new(move |app: &mut App| app.delete_path(&rel)));
                             close = true;
                         }
-                        if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
                             close = true;
                         }
                     });
                 }
                 Dialog::GitRestore { hash, path } => {
-                    ui.label(egui::RichText::new("Datei wiederherstellen?").font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(tr!("Datei wiederherstellen?" | "Restore file?")).font(widgets::display_font(20.0)).color(pal.bright));
                     ui.add_space(6.0);
-                    ui.label(format!("„{path}“ wird auf den Stand von Commit {} zurückgesetzt. Nicht committete Änderungen an dieser Datei gehen verloren.", &hash[..hash.len().min(7)]));
+                    ui.label(trf!("„{path}“ wird auf den Stand von Commit {} zurückgesetzt. Nicht committete Änderungen an dieser Datei gehen verloren." | "“{path}” will be reset to commit {}. Uncommitted changes to this file will be lost.", &hash[..hash.len().min(7)]));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if widgets::button(ui, ic::UNDO, "Wiederherstellen", pal, BtnKind::Danger).clicked() {
+                        if widgets::button(ui, ic::UNDO, tr!("Wiederherstellen" | "Restore"), pal, BtnKind::Danger).clicked() {
                             let (hash, path) = (hash.clone(), path.clone());
                             action = Some(Box::new(move |app: &mut App| {
                                 let root = app.project.root.clone();
@@ -1408,7 +1438,7 @@ impl App {
                                 match crate::git::GitState::restore_file(&root, &hash, &path) {
                                     Ok(()) => {
                                         let g = app.pal.green;
-                                        app.toast(ic::UNDO, format!("{path} wiederhergestellt"), g, now);
+                                        app.toast(ic::UNDO, trf!("{path} wiederhergestellt" | "{path} restored"), g, now);
                                     }
                                     Err(e) => {
                                         let r = app.pal.red;
@@ -1420,7 +1450,7 @@ impl App {
                             }));
                             close = true;
                         }
-                        if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
                             close = true;
                         }
                     });
@@ -1432,16 +1462,16 @@ impl App {
                         v.dedup_by(|a, b| a.path == b.path);
                         v
                     };
-                    ui.label(egui::RichText::new("Änderungen verwerfen?").font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(tr!("Änderungen verwerfen?" | "Discard changes?")).font(widgets::display_font(20.0)).color(pal.bright));
                     ui.add_space(6.0);
                     if files.is_empty() {
-                        ui.label(egui::RichText::new("Hier gibt es keine Änderungen seit dem letzten Commit.").color(pal.subtext));
+                        ui.label(egui::RichText::new(tr!("Hier gibt es keine Änderungen seit dem letzten Commit." | "There are no changes since the last commit.")).color(pal.subtext));
                         ui.add_space(10.0);
-                        if widgets::button(ui, "", "Schließen", pal, BtnKind::Ghost).clicked() {
+                        if widgets::button(ui, "", tr!("Schließen" | "Close"), pal, BtnKind::Ghost).clicked() {
                             close = true;
                         }
                     } else {
-                        ui.label(format!("{} Datei(en) werden auf den Stand des letzten Commits zurückgesetzt. Neue Dateien werden gelöscht – auch in geöffneten Editoren.", files.len()));
+                        ui.label(trf!("{} Datei(en) werden auf den Stand des letzten Commits zurückgesetzt. Neue Dateien werden gelöscht – auch in geöffneten Editoren." | "{} file(s) will be reset to the last commit. New files will be deleted – also in open editors.", files.len()));
                         ui.add_space(8.0);
                         egui::Frame::new().fill(pal.base).corner_radius(8).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -1458,12 +1488,12 @@ impl App {
                         });
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if widgets::button(ui, ic::UNDO, "Verwerfen", pal, BtnKind::Danger).clicked() {
+                            if widgets::button(ui, ic::UNDO, tr!("Verwerfen" | "Discard"), pal, BtnKind::Danger).clicked() {
                                 let paths = paths.clone();
                                 action = Some(Box::new(move |app: &mut App| app.git_revert(&paths, now)));
                                 close = true;
                             }
-                            if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
+                            if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
                                 close = true;
                             }
                         });
@@ -1473,8 +1503,8 @@ impl App {
                     let up = &mut self.updater;
                     let tag = up.available.as_ref().map(|r| r.tag.clone()).unwrap_or_default();
                     ui.set_width(460.0);
-                    ui.label(egui::RichText::new(format!("Update auf {tag}")).font(widgets::display_font(22.0)).color(pal.bright));
-                    ui.label(egui::RichText::new(format!("Installiert: {}", crate::updater::VERSION)).color(pal.dim));
+                    ui.label(egui::RichText::new(trf!("Update auf {tag}" | "Update to {tag}")).font(widgets::display_font(22.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(trf!("Installiert: {}" | "Installed: {}", crate::updater::VERSION)).color(pal.dim));
                     ui.add_space(8.0);
                     if let Some(rel) = &up.available {
                         if !rel.notes.trim().is_empty() {
@@ -1497,22 +1527,22 @@ impl App {
                         ui.add_space(6.0);
                     }
                     if let Some(src) = crate::updater::source_checkout() {
-                        ui.label(egui::RichText::new("nEdit läuft aus einem Quellcode-Checkout. Aktualisieren mit:").color(pal.subtext));
+                        ui.label(egui::RichText::new(tr!("nEdit läuft aus einem Quellcode-Checkout. Aktualisieren mit:" | "nEdit runs from a source checkout. Update with:")).color(pal.subtext));
                         let cmd = format!("cd {} && git pull && ./install.sh", src.display());
                         ui.label(egui::RichText::new(&cmd).font(widgets::mono_font(12.0)).color(pal.accent));
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            if widgets::button(ui, ic::COPY, "Befehl kopieren", pal, BtnKind::Primary).clicked() {
+                            if widgets::button(ui, ic::COPY, tr!("Befehl kopieren" | "Copy command"), pal, BtnKind::Primary).clicked() {
                                 ui.ctx().copy_text(cmd.clone());
                             }
-                            if widgets::button(ui, "", "Schließen", pal, BtnKind::Ghost).clicked() {
+                            if widgets::button(ui, "", tr!("Schließen" | "Close"), pal, BtnKind::Ghost).clicked() {
                                 close = true;
                             }
                         });
                     } else {
                         ui.horizontal(|ui| {
                             if up.installed {
-                                if widgets::button(ui, ic::REFRESH, "Jetzt neu starten", pal, BtnKind::Primary).clicked() {
+                                if widgets::button(ui, ic::REFRESH, tr!("Jetzt neu starten" | "Restart now"), pal, BtnKind::Primary).clicked() {
                                     action = Some(Box::new(|app: &mut App| {
                                         app.save_all();
                                         match crate::updater::restart() {
@@ -1524,31 +1554,31 @@ impl App {
                             } else if up.installing {
                                 let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
                                 widgets::draw_spinner(ui, r.center(), 7.0, pal.accent);
-                            } else if widgets::button(ui, ic::DOWNLOAD, "Jetzt aktualisieren", pal, BtnKind::Primary).clicked() {
+                            } else if widgets::button(ui, ic::DOWNLOAD, tr!("Jetzt aktualisieren" | "Update now"), pal, BtnKind::Primary).clicked() {
                                 up.install(ctx);
                             }
                             if let Some(rel) = &up.available {
-                                if widgets::button(ui, ic::GLOBE, "Auf GitHub", pal, BtnKind::Ghost).clicked() {
+                                if widgets::button(ui, ic::GLOBE, tr!("Auf GitHub" | "On GitHub"), pal, BtnKind::Ghost).clicked() {
                                     ui.ctx().open_url(egui::OpenUrl::new_tab(rel.html_url.clone()));
                                 }
                             }
-                            if !up.installing && widgets::button(ui, "", "Später", pal, BtnKind::Ghost).clicked() {
+                            if !up.installing && widgets::button(ui, "", tr!("Später" | "Later"), pal, BtnKind::Ghost).clicked() {
                                 close = true;
                             }
                         });
                     }
                 }
                 Dialog::NewProject { name } => {
-                    ui.label(egui::RichText::new("Neues Projekt").font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.label(egui::RichText::new(tr!("Neues Projekt" | "New project")).font(widgets::display_font(20.0)).color(pal.bright));
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("Mit Vorlage für Arbeit, TU-Graz-Präsentation und Bibliothek.").color(pal.dim));
+                    ui.label(egui::RichText::new(tr!("Mit Vorlage für Arbeit, TU-Graz-Präsentation und Bibliothek." | "With template for thesis, TU Graz presentation and library.")).color(pal.dim));
                     ui.add_space(8.0);
-                    let r = ui.add(egui::TextEdit::singleline(name).hint_text("Projektname").desired_width(f32::INFINITY));
+                    let r = ui.add(egui::TextEdit::singleline(name).hint_text(tr!("Projektname" | "Project name")).desired_width(f32::INFINITY));
                     r.request_focus();
                     ui.add_space(10.0);
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
-                        if (widgets::button(ui, ic::PLUS, "Erstellen", pal, BtnKind::Primary).clicked() || enter) && !name.trim().is_empty() {
+                        if (widgets::button(ui, ic::PLUS, tr!("Erstellen" | "Create"), pal, BtnKind::Primary).clicked() || enter) && !name.trim().is_empty() {
                             let name = name.trim().to_string();
                             let ctx2 = ctx.clone();
                             action = Some(Box::new(move |app: &mut App| {
@@ -1562,7 +1592,7 @@ impl App {
                             }));
                             close = true;
                         }
-                        if widgets::button(ui, "", "Abbrechen", pal, BtnKind::Ghost).clicked() {
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
                             close = true;
                         }
                     });
@@ -1581,14 +1611,14 @@ impl App {
         let _ = now;
     }
 
-    /// Movable "Über nEdit" window.
+    /// Movable tr!("Über nEdit" | "About nEdit") window.
     fn about_window(&mut self, ctx: &egui::Context, pal: &Palette) {
         if !self.about_open {
             return;
         }
         let mut open = true;
         let screen = ctx.content_rect();
-        egui::Window::new(egui::RichText::new("Über nEdit").font(widgets::ui_font(13.0)).color(pal.text))
+        egui::Window::new(egui::RichText::new(tr!("Über nEdit" | "About nEdit")).font(widgets::ui_font(13.0)).color(pal.text))
             .id(egui::Id::new("about-window"))
             .open(&mut open)
             .collapsible(false)
@@ -1613,10 +1643,10 @@ impl App {
                     ui.painter().text(r.center() + vec2(0.0, -3.0), Align2::CENTER_CENTER, "∂", widgets::display_font(58.0), pal.on_accent);
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new("nEdit").font(widgets::display_font(30.0)).color(pal.bright));
-                    ui.label(egui::RichText::new(format!("LaTeX Studio  ·  Version {}", crate::updater::VERSION)).font(widgets::ui_font(12.5)).color(pal.dim));
+                    ui.label(egui::RichText::new(trf!("LaTeX Studio  ·  Version {}" | "LaTeX Studio  ·  version {}", crate::updater::VERSION)).font(widgets::ui_font(12.5)).color(pal.dim));
                     ui.add_space(16.0);
                     ui.label(
-                        egui::RichText::new("Erstellt von Norbert Winter – zur Motivation, die Masterarbeit endlich fertigzustellen.")
+                        egui::RichText::new(tr!("Erstellt von Norbert Winter – zur Motivation, die Masterarbeit endlich fertigzustellen." | "Created by Norbert Winter – as motivation to finally finish the master's thesis."))
                             .font(widgets::FontIdExt::serif(17.0))
                             .italics()
                             .color(pal.text),
@@ -1629,7 +1659,7 @@ impl App {
                     ui.add_space(14.0);
                     ui.hyperlink_to(egui::RichText::new(format!("{}  github.com/jwm3000/nedit", ic::GLOBE)).font(widgets::ui_font(12.5)), "https://github.com/jwm3000/nedit");
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new("MIT-Lizenz  ·  Rust & egui  ·  Icons: Nerd Fonts").font(widgets::ui_font(11.0)).color(pal.dim));
+                    ui.label(egui::RichText::new(tr!("MIT-Lizenz  ·  Rust & egui  ·  Icons: Nerd Fonts" | "MIT license  ·  Rust & egui  ·  Icons: Nerd Fonts")).font(widgets::ui_font(11.0)).color(pal.dim));
                 });
             });
         if !open {
@@ -1822,6 +1852,26 @@ impl App {
                 let b = &self.buffers[i];
                 eprintln!("REVTEST after: dirty={} has_unsaved={} has_saved={} equals_head={}", b.dirty(), b.text.contains("UNGESPEICHERTE"), b.text.contains("GESPEICHERTE ÄNDERUNG"), b.text == disk);
             }
+        }
+        if let Some(q) = name.split("quick=").nth(1) {
+            if self.quick.is_none() {
+                self.open_quick(now - 1.0);
+                if let Some(qo) = &mut self.quick {
+                    qo.query = q.replace('_', " ");
+                }
+            }
+        } else if name.contains("quick") && self.quick.is_none() {
+            self.open_quick(now - 1.0);
+        }
+        if name.contains("split") {
+            self.settings.diff_split = true;
+        }
+        if name.contains("vblock") && self.debug_typed != 2000 + self.shot_step {
+            self.debug_typed = 2000 + self.shot_step;
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Paste(String::new()));
+                i.events.push(egui::Event::Text("jjjjlll".into()));
+            });
         }
         if name.contains("about") {
             self.about_open = true;

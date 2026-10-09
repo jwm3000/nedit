@@ -51,13 +51,13 @@ fn strip_tex(s: &str) -> &str {
 fn valid_name(name: &str) -> Result<String, String> {
     let n = name.trim().trim_matches('/').to_string();
     if n.is_empty() {
-        return Err("Name fehlt".into());
+        return Err(tr!("Name fehlt" | "Name missing").into());
     }
     if n.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
-        return Err("Ungültiger Name".into());
+        return Err(tr!("Ungültiger Name" | "Invalid name").into());
     }
     if n.contains('\\') {
-        return Err("Bitte „/“ statt „\\“ verwenden".into());
+        return Err(tr!("Bitte „/“ statt „\\“ verwenden" | "Please use “/” instead of “\\”").into());
     }
     Ok(n)
 }
@@ -97,7 +97,7 @@ impl App {
         let rel = join(parent, &n);
         let abs = self.project.root.join(&rel);
         if abs.exists() {
-            return Err(format!("„{n}“ existiert bereits"));
+            return Err(trf!("„{n}“ existiert bereits" | "“{n}” already exists"));
         }
         if folder {
             std::fs::create_dir_all(&abs).map_err(|e| e.to_string())?;
@@ -138,9 +138,9 @@ impl App {
     pub fn include_in_main(&mut self, rel: &str) -> Result<String, String> {
         let main = self.project.config.thesis_main.clone();
         if rel == main {
-            return Err("Das ist das Hauptdokument".into());
+            return Err(tr!("Das ist das Hauptdokument" | "This is the main document").into());
         }
-        let text = self.read_source(&main).ok_or("Hauptdokument nicht gefunden")?;
+        let text = self.read_source(&main).ok_or(tr!("Hauptdokument nicht gefunden" | "Main document not found"))?;
         let target = strip_tex(rel).to_string();
         let re = regex::Regex::new(r"^(\s*)\\(input|include)\{([^}]+)\}").unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -163,7 +163,7 @@ impl App {
         let (idx, indent, cmd) = match best.or(any) {
             Some(b) => b,
             None => {
-                let end = lines.iter().position(|l| l.contains("\\end{document}")).ok_or("Kein \\end{document} gefunden")?;
+                let end = lines.iter().position(|l| l.contains("\\end{document}")).ok_or(tr!("Kein \\end{document} gefunden" | "No \\end{document} found"))?;
                 (end.saturating_sub(1), String::new(), "input".to_string())
             }
         };
@@ -174,7 +174,7 @@ impl App {
             new.push('\n');
         }
         self.write_source(&main, new);
-        Ok(format!("\\{cmd}{{{target}}} in {main} eingefügt"))
+        Ok(trf!("\\{cmd}{{{target}}} in {main} eingefügt" | "Inserted \\{cmd}{{{target}}} into {main}"))
     }
 
     /// Rename or move a file/folder, keeping buffers, tabs and LaTeX references in sync.
@@ -183,11 +183,11 @@ impl App {
             return Ok(());
         }
         if to.starts_with(&format!("{from}/")) {
-            return Err("Ein Ordner kann nicht in sich selbst verschoben werden".into());
+            return Err(tr!("Ein Ordner kann nicht in sich selbst verschoben werden" | "A folder cannot be moved into itself").into());
         }
         let root = self.project.root.clone();
         if root.join(to).exists() {
-            return Err(format!("„{to}“ existiert bereits"));
+            return Err(trf!("„{to}“ existiert bereits" | "“{to}” already exists"));
         }
         // save first so nothing is lost or written back to the old place
         self.save_all();
@@ -372,21 +372,21 @@ pub fn files_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let ctx = ui.ctx().clone();
     ui.horizontal(|ui| {
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("DATEIEN").font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+        ui.label(egui::RichText::new(tr!("DATEIEN" | "FILES")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if widgets::icon_button_sized(ui, ic::UPLOAD, "Dateien hochladen (oder ins Fenster ziehen)", pal, false, 24.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::UPLOAD, tr!("Dateien hochladen (oder ins Fenster ziehen)" | "Upload files (or drop them into the window)"), pal, false, 24.0).clicked() {
                 let dir = app.target_dir();
-                if let Some(files) = rfd::FileDialog::new().set_title("Dateien zum Projekt hinzufügen").pick_files() {
+                if let Some(files) = rfd::FileDialog::new().set_title(tr!("Dateien zum Projekt hinzufügen" | "Add files to the project")).pick_files() {
                     let n = app.import_files(&files, &dir);
                     let g = pal.green;
-                    app.toast(ic::UPLOAD, format!("{n} Datei(en) hinzugefügt"), g, now);
+                    app.toast(ic::UPLOAD, trf!("{n} Datei(en) hinzugefügt" | "{n} file(s) added"), g, now);
                 }
             }
-            if widgets::icon_button_sized(ui, ic::FOLDER, "Neuer Ordner", pal, matches!(app.tree_ui.edit.as_ref().map(|e| &e.kind), Some(EditKind::NewFolder)), 24.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::FOLDER, tr!("Neuer Ordner" | "New folder"), pal, matches!(app.tree_ui.edit.as_ref().map(|e| &e.kind), Some(EditKind::NewFolder)), 24.0).clicked() {
                 app.begin_new(true, None);
             }
-            if widgets::icon_button_sized(ui, ic::PLUS, "Neue Datei (.tex wird ergänzt)", pal, matches!(app.tree_ui.edit.as_ref().map(|e| &e.kind), Some(EditKind::NewFile)), 24.0).clicked() {
+            if widgets::icon_button_sized(ui, ic::PLUS, tr!("Neue Datei (.tex wird ergänzt)" | "New file (.tex is added)"), pal, matches!(app.tree_ui.edit.as_ref().map(|e| &e.kind), Some(EditKind::NewFile)), 24.0).clicked() {
                 app.begin_new(false, None);
             }
         });
@@ -396,7 +396,7 @@ pub fn files_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     ui.horizontal(|ui| {
         ui.add_space(6.0);
         ui.label(egui::RichText::new(format!("{}  /{}", ic::FOLDER_OPEN, target)).font(widgets::ui_font(11.0)).color(mix(pal.dim, pal.accent, 0.35)))
-            .on_hover_text("Neue Dateien und Uploads landen in diesem Ordner. Ordner anklicken, um ihn zu wählen.");
+            .on_hover_text(tr!("Neue Dateien und Uploads landen in diesem Ordner. Ordner anklicken, um ihn zu wählen." | "New files and uploads go into this folder. Click a folder to choose it."));
     });
     ui.add_space(4.0);
 
@@ -419,7 +419,7 @@ pub fn files_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         if let Some(p) = resp.dnd_hover_payload::<String>() {
             if !parent_of(&p).is_empty() {
                 ui.painter().rect_stroke(rect.shrink(2.0), 6.0, Stroke::new(1.5, with_alpha(pal.accent, 140)), StrokeKind::Inside);
-                ui.painter().text(rect.center_top() + vec2(0.0, 18.0), Align2::CENTER_CENTER, "In Projektordner verschieben", widgets::ui_font(11.5), pal.accent);
+                ui.painter().text(rect.center_top() + vec2(0.0, 18.0), Align2::CENTER_CENTER, tr!("In Projektordner verschieben" | "Move to project folder"), widgets::ui_font(11.5), pal.accent);
             }
         }
         if let Some(p) = resp.dnd_release_payload::<String>() {
@@ -436,11 +436,11 @@ pub fn files_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             clicked_empty = true;
         }
         resp.context_menu(|ui| {
-            if ui.button(format!("{}  Neue Datei", ic::PLUS)).clicked() {
+            if ui.button(trf!("{}  Neue Datei" | "{}  New file", ic::PLUS)).clicked() {
                 app.begin_new(false, Some(String::new()));
                 ui.close();
             }
-            if ui.button(format!("{}  Neuer Ordner", ic::FOLDER)).clicked() {
+            if ui.button(trf!("{}  Neuer Ordner" | "{}  New folder", ic::FOLDER)).clicked() {
                 app.begin_new(true, Some(String::new()));
                 ui.close();
             }
@@ -456,7 +456,7 @@ pub fn files_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         let dir = app.tree_ui.hover_dir.clone().unwrap_or_else(|| app.target_dir());
         let pill = Rect::from_min_size(pos2(tree_rect.min.x + 8.0, tree_rect.max.y - 40.0), vec2(tree_rect.width() - 16.0, 30.0));
         ui.painter().rect_filled(pill, 8.0, pal.accent);
-        ui.painter().text(pill.center(), Align2::CENTER_CENTER, format!("{}  Ablegen in /{}", ic::DOWNLOAD, truncate(&dir, 26)), widgets::ui_font(12.0), pal.on_accent);
+        ui.painter().text(pill.center(), Align2::CENTER_CENTER, trf!("{}  Ablegen in /{}" | "{}  Drop into /{}", ic::DOWNLOAD, truncate(&dir, 26)), widgets::ui_font(12.0), pal.on_accent);
     }
     // keyboard: F2 rename, Del delete (when the tree is hovered and no text field is active)
     if ui.rect_contains_pointer(tree_rect) && !ctx.egui_wants_keyboard_input() && app.tree_ui.edit.is_none() {
@@ -509,7 +509,7 @@ fn is_image(rel: &str) -> bool {
 fn edit_row(app: &mut App, ui: &mut Ui, pal: &Palette, depth: usize, t: Tab, now: f64) {
     let Some(e) = app.tree_ui.edit.clone() else { return };
     let (icon, hint) = match e.kind {
-        EditKind::NewFolder => (ic::FOLDER, "Ordnername"),
+        EditKind::NewFolder => (ic::FOLDER, tr!("Ordnername" | "Folder name")),
         EditKind::NewFile => (ic::FILE_TEXT, "name.tex"),
         EditKind::Rename(_) => (ic::PENCIL, ""),
     };
@@ -670,7 +670,7 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
         let presp = ui.interact(pr, ui.id().with(("tree-plus", &n.rel)), Sense::click());
         ui.painter().rect_filled(pr, 5.0, if presp.hovered() { with_alpha(pal.accent, 50) } else { with_alpha(pal.text, 14) });
         ui.painter().text(pr.center(), Align2::CENTER_CENTER, ic::PLUS, widgets::ui_font(10.0), pal.text);
-        if presp.on_hover_text("Neue Datei in diesem Ordner").clicked() {
+        if presp.on_hover_text(tr!("Neue Datei in diesem Ordner" | "New file in this folder")).clicked() {
             app.tree_ui.selected = Some(n.rel.clone());
             app.begin_new(false, Some(n.rel.clone()));
         }
@@ -694,25 +694,25 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
     resp.context_menu(|ui| {
         app.tree_ui.selected = Some(n.rel.clone());
         if n.is_dir {
-            if ui.button(format!("{}  Neue Datei", ic::PLUS)).clicked() {
+            if ui.button(trf!("{}  Neue Datei" | "{}  New file", ic::PLUS)).clicked() {
                 app.begin_new(false, Some(n.rel.clone()));
                 ui.close();
             }
-            if ui.button(format!("{}  Neuer Ordner", ic::FOLDER)).clicked() {
+            if ui.button(trf!("{}  Neuer Ordner" | "{}  New folder", ic::FOLDER)).clicked() {
                 app.begin_new(true, Some(n.rel.clone()));
                 ui.close();
             }
-            if ui.button(format!("{}  Dateien hierher hochladen", ic::UPLOAD)).clicked() {
+            if ui.button(trf!("{}  Dateien hierher hochladen" | "{}  Upload files here", ic::UPLOAD)).clicked() {
                 if let Some(files) = rfd::FileDialog::new().pick_files() {
                     let k = app.import_files(&files, &n.rel);
                     let g = pal.green;
-                    app.toast(ic::UPLOAD, format!("{k} Datei(en) hinzugefügt"), g, now);
+                    app.toast(ic::UPLOAD, trf!("{k} Datei(en) hinzugefügt" | "{k} file(s) added"), g, now);
                 }
                 ui.close();
             }
             ui.separator();
         } else {
-            if n.rel.ends_with(".tex") && n.rel != app.project.config.thesis_main && ui.button(format!("{}  In Hauptdokument einbinden", ic::LINK)).clicked() {
+            if n.rel.ends_with(".tex") && n.rel != app.project.config.thesis_main && ui.button(trf!("{}  In Hauptdokument einbinden" | "{}  Include in main document", ic::LINK)).clicked() {
                 match app.include_in_main(&n.rel) {
                     Ok(m) => {
                         let g = pal.green;
@@ -725,7 +725,7 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
                 }
                 ui.close();
             }
-            if is_image(&n.rel) && ui.button(format!("{}  Als Abbildung einfügen", ic::IMAGE)).clicked() {
+            if is_image(&n.rel) && ui.button(trf!("{}  Als Abbildung einfügen" | "{}  Insert as figure", ic::IMAGE)).clicked() {
                 let stem = Path::new(&n.rel).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 let snip = if t == Tab::Slides {
                     format!("\\begin{{frame}}{{$0{stem}}}\n  \\centering\n  \\includegraphics[width=0.8\\textwidth,height=0.7\\textheight,keepaspectratio]{{{}}}\n\\end{{frame}}\n", n.rel)
@@ -735,25 +735,25 @@ fn tree_node(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, depth: usi
                 app.insert_snippet(t, &snip);
                 ui.close();
             }
-            if ui.button(format!("{}  Pfad kopieren", ic::COPY)).clicked() {
+            if ui.button(trf!("{}  Pfad kopieren" | "{}  Copy path", ic::COPY)).clicked() {
                 ui.ctx().copy_text(n.rel.clone());
                 ui.close();
             }
         }
         git_menu(app, ui, pal, n, now);
         ui.separator();
-        if ui.button(format!("{}  Umbenennen   F2", ic::PENCIL)).clicked() {
+        if ui.button(trf!("{}  Umbenennen   F2" | "{}  Rename   F2", ic::PENCIL)).clicked() {
             app.begin_rename(&n.rel);
             ui.close();
         }
-        if ui.button(format!("{}  Im Dateimanager zeigen", ic::FOLDER_OPEN)).clicked() {
+        if ui.button(trf!("{}  Im Dateimanager zeigen" | "{}  Show in file manager", ic::FOLDER_OPEN)).clicked() {
             let p = app.project.root.join(&n.rel);
             let dir = if n.is_dir { p } else { p.parent().unwrap().to_path_buf() };
             crate::platform::open_external(dir);
             ui.close();
         }
         ui.separator();
-        if ui.button(egui::RichText::new(format!("{}  Löschen   Entf", ic::TRASH)).color(pal.red)).clicked() {
+        if ui.button(egui::RichText::new(trf!("{}  Löschen   Entf" | "{}  Delete   Del", ic::TRASH)).color(pal.red)).clicked() {
             app.dialog = Some(Dialog::Delete { rel: n.rel.clone() });
             ui.close();
         }
@@ -775,11 +775,11 @@ fn git_menu(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, now: f64) {
     ui.separator();
     ui.label(egui::RichText::new("GIT").font(widgets::ui_font(10.0)).color(pal.dim).extra_letter_spacing(1.2));
     if !app.git.git_available {
-        ui.label(egui::RichText::new("git ist nicht installiert").color(pal.dim));
+        ui.label(egui::RichText::new(tr!("git ist nicht installiert" | "git is not installed")).color(pal.dim));
         return;
     }
     if !app.git.is_repo {
-        if ui.button(format!("{}  Git-Repository anlegen", ic::PLUS)).clicked() {
+        if ui.button(trf!("{}  Git-Repository anlegen" | "{}  Create Git repository", ic::PLUS)).clicked() {
             app.git_init(now);
             ui.close();
         }
@@ -787,11 +787,11 @@ fn git_menu(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, now: f64) {
     }
     let changes = app.git.changes_under(&n.rel);
     if changes.is_empty() {
-        ui.add_enabled(false, egui::Button::new(format!("{}  Keine Änderungen seit dem letzten Commit", ic::CHECK)));
+        ui.add_enabled(false, egui::Button::new(trf!("{}  Keine Änderungen seit dem letzten Commit" | "{}  No changes since the last commit", ic::CHECK)));
         return;
     }
     if !n.is_dir {
-        if ui.button(format!("{}  Änderungen anzeigen", ic::EYE)).clicked() {
+        if ui.button(trf!("{}  Änderungen anzeigen" | "{}  Show changes", ic::EYE)).clicked() {
             app.save_all();
             let root = app.project.root.clone();
             app.git.open_working_diff(&root, &n.rel);
@@ -799,7 +799,7 @@ fn git_menu(app: &mut App, ui: &mut Ui, pal: &Palette, n: &FileNode, now: f64) {
             ui.close();
         }
     }
-    let label = if n.is_dir { format!("{}  Änderungen im Ordner verwerfen ({}) …", ic::UNDO, changes.len()) } else { format!("{}  Änderungen verwerfen …", ic::UNDO) };
+    let label = if n.is_dir { trf!("{}  Änderungen im Ordner verwerfen ({}) …" | "{}  Discard changes in folder ({}) …", ic::UNDO, changes.len()) } else { trf!("{}  Änderungen verwerfen …" | "{}  Discard changes …", ic::UNDO) };
     if ui.button(egui::RichText::new(label).color(pal.red)).clicked() {
         app.dialog = Some(Dialog::GitRevert { paths: vec![n.rel.clone()] });
         ui.close();

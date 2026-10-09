@@ -56,7 +56,15 @@ Normal/Insert/Visual/Visual-Line, Zähler, Bewegungen (`hjkl w b e W B E 0 ^ $ g
 `Ctrl-d/u`), Operatoren `d c y > <` mit Textobjekten (`iw aw i{ a{ i( i[ i" i$ ip` – z. B.
 `ci{` oder `di$` für LaTeX), `x X s S D C p P r J ~ o O i a I A`, `u`/`Ctrl-r`, `.`-Wiederholung,
 `/suche` mit `n`/`N` sowie `:w` (speichern & kompilieren), `:q`, `:wq`, `:{zeile}`,
-`:%s/alt/neu/g` und `:noh`. Der Modus steht als Badge in der Statusleiste.
+`:%s/alt/neu/g` und `:noh`. **Strg+V** startet die Block-Auswahl (`d y c r ~ > < I A $`) –
+z. B. `Strg+V jj I% Esc` kommentiert drei Zeilen aus. Der Modus steht als Badge in der Statusleiste.
+
+### 🔎 Schnellsuche (2× Umschalt)
+
+Zweimal kurz **Umschalt** drücken (oder **Strg+P**) öffnet ein schwebendes Suchfeld über
+allem: zuletzt geöffnete Dateien, alle Projektdateien, Kapitel und Abschnitte (aus Arbeit
+und Folien), Literatur (Enter fügt `\citep{…}` ein) und Befehle – mit Unschärfesuche.
+Präfixe: `#` Gliederung, `@` Literatur, `>` Befehle, `:42` springt zu Zeile 42.
 
 ### ⚡ Autovervollständigung
 
@@ -121,6 +129,7 @@ dem Cursor zeigt. Die Literatur kommt aus derselben Bibliothek wie die Arbeit.
 - Repository mit einem Klick anlegen, Commit („Stand sichern“), Push/Pull
 - Geänderte Dateien sind im Dateibaum und in den Tabs mit **M**/**N** markiert,
   im Editor zeigen farbige Balken geänderte Zeilen seit dem letzten Commit
+- Diff **inline** oder **nebeneinander** (zwei Spalten wie auf GitHub, mit Hervorhebung der geänderten Wörter)
 - Verlauf als Zeitleiste, jeder Commit mit Diff – einzelne Dateien lassen sich auf einen
   früheren Stand zurücksetzen
 
@@ -221,6 +230,7 @@ Rust-Bibliotheken (werden von Cargo automatisch geladen): `eframe`/`egui` (Oberf
 | --- | --- |
 | Strg+S | Speichern & kompilieren (PDF springt zur Cursorstelle) |
 | Strg+Enter | Kompilieren |
+| 2× Umschalt / Strg+P | Schnellsuche (Dateien, Kapitel, Literatur, Befehle) |
 | Strg+E | Code ↔ Visuell |
 | Strg+Umschalt+D | Dokument-Modus |
 | F11 / Esc | Vollbild (nur Text) |
@@ -277,6 +287,7 @@ Rückmeldungen und Pull Requests sind willkommen.
 
 ## Lizenz & Hinweise
 
+- Oberfläche auf **Deutsch** (Standard) oder **Englisch** – umschaltbar im ⚙-Menü.
 - nEdit steht unter der [MIT-Lizenz](LICENSE) – © 2026 Norbert Winter.
 - Das TU-Graz-Beamer-Theme ist eine **inoffizielle** Nachempfindung und steht in keiner
   Verbindung zur TU Graz. Das offizielle Logo ist nicht enthalten – lege es als
