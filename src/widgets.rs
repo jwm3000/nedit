@@ -289,3 +289,27 @@ pub fn fancy_slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32, step: f32,
     p.text(lr.center(), Align2::CENTER_CENTER, label, ui_font(12.0), pal.text);
     resp
 }
+
+/// Placeholder "icon" that segmented controls replace with the painted Vim logo.
+pub const VIM_LOGO: &str = "\u{1}vim";
+
+/// The Vim logo in its original colors: green diamond, white "V", dark outlines.
+pub fn paint_vim_logo(p: &egui::Painter, c: egui::Pos2, size: f32) {
+    use egui::{pos2, Color32, Shape, Stroke};
+    let s = size / 2.0;
+    let pt = |x: f32, y: f32| pos2(c.x + x * s, c.y + y * s);
+    let dark = Color32::from_rgb(0x1b, 0x1f, 0x1b);
+    let green = Color32::from_rgb(0x01, 0x98, 0x33);
+    let line = Stroke::new((size / 14.0).max(0.8), dark);
+    // diamond with a light inner rim
+    let diamond = vec![pt(0.0, -1.0), pt(1.0, 0.0), pt(0.0, 1.0), pt(-1.0, 0.0)];
+    p.add(Shape::convex_polygon(diamond, green, line));
+    let rim = vec![pt(0.0, -0.8), pt(0.8, 0.0), pt(0.0, 0.8), pt(-0.8, 0.0)];
+    p.add(Shape::closed_line(rim, Stroke::new((size / 22.0).max(0.6), Color32::from_rgb(0x8f, 0xd1, 0x9e))));
+    // the "V": a wide left stem and a narrow right arm
+    let white = Color32::from_rgb(0xf2, 0xf2, 0xf2);
+    let left = vec![pt(-0.86, -0.66), pt(-0.36, -0.66), pt(0.14, 0.66), pt(-0.12, 0.66)];
+    let right = vec![pt(0.30, -0.66), pt(0.80, -0.66), pt(0.14, 0.66), pt(-0.06, 0.40)];
+    p.add(Shape::convex_polygon(right, Color32::from_rgb(0xd6, 0xd6, 0xd6), line));
+    p.add(Shape::convex_polygon(left, white, line));
+}

@@ -69,11 +69,12 @@ fn toggle(ui: &mut Ui, on: &mut bool, pal: &Palette) -> egui::Response {
 /// Segmented control; returns the clicked index.
 fn segmented(ui: &mut Ui, options: &[(&str, &str)], selected: usize, pal: &Palette, id: Id) -> Option<usize> {
     let font = widgets::ui_font(13.0);
+    let logo = |icon: &str| icon == widgets::VIM_LOGO;
     let widths: Vec<f32> = options
         .iter()
         .map(|(icon, label)| {
-            let t = if icon.is_empty() { label.to_string() } else { format!("{icon}  {label}") };
-            ui.painter().layout_no_wrap(t, font.clone(), pal.text).size().x + 28.0
+            let t = if icon.is_empty() || logo(icon) { label.to_string() } else { format!("{icon}  {label}") };
+            ui.painter().layout_no_wrap(t, font.clone(), pal.text).size().x + 28.0 + if logo(icon) { 27.0 } else { 0.0 }
         })
         .collect();
     let total: f32 = widths.iter().sum::<f32>() + 6.0;
@@ -100,8 +101,16 @@ fn segmented(ui: &mut Ui, options: &[(&str, &str)], selected: usize, pal: &Palet
         let resp = ui.interact(cell, id.with(i), Sense::click());
         let sel = i == selected;
         let col = if sel { pal.bright } else if resp.hovered() { pal.text } else { pal.subtext };
-        let t = if icon.is_empty() { label.to_string() } else { format!("{icon}  {label}") };
-        ui.painter().text(cell.center(), Align2::CENTER_CENTER, t, font.clone(), col);
+        if logo(icon) {
+            let g = ui.painter().layout_no_wrap(label.to_string(), font.clone(), col);
+            let total = 20.0 + 7.0 + g.size().x;
+            let x0 = cell.center().x - total / 2.0;
+            widgets::paint_vim_logo(ui.painter(), pos2(x0 + 10.0, cell.center().y), 20.0);
+            ui.painter().galley(pos2(x0 + 27.0, cell.center().y - g.size().y / 2.0), g, col);
+        } else {
+            let t = if icon.is_empty() { label.to_string() } else { format!("{icon}  {label}") };
+            ui.painter().text(cell.center(), Align2::CENTER_CENTER, t, font.clone(), col);
+        }
         if resp.clicked() && !sel {
             clicked = Some(i);
         }
@@ -425,7 +434,7 @@ impl App {
             let cur = self.settings.input_vim as usize;
             let mut pick = None;
             row(ui, pal, tr!("Tastaturbelegung" | "Keybindings"), tr!("Vim gilt im Code-Modus, visuell bleibt die Standardeingabe" | "Vim applies in code mode; visual mode keeps standard input"), |ui| {
-                pick = segmented(ui, &[("", "Standard"), (ic::TERMINAL, "Vim")], cur, pal, Id::new("seg-input"));
+                pick = segmented(ui, &[("", "Standard"), (widgets::VIM_LOGO, "Vim")], cur, pal, Id::new("seg-input"));
             });
             if let Some(i) = pick {
                 self.settings.input_vim = i == 1;
@@ -754,7 +763,7 @@ impl App {
         let cur = self.settings.input_vim as usize;
         let mut pick = None;
         menu_line(ui, pal, tr!("Eingabe" | "Input"), |ui| {
-            pick = segmented(ui, &[("", "Standard"), (ic::TERMINAL, "Vim")], cur, pal, Id::new("menu-seg-input"));
+            pick = segmented(ui, &[("", "Standard"), (widgets::VIM_LOGO, "Vim")], cur, pal, Id::new("menu-seg-input"));
         });
         if let Some(i) = pick {
             self.settings.input_vim = i == 1;
