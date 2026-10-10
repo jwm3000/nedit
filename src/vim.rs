@@ -395,6 +395,12 @@ impl VimState {
         let ranges = self.block_ranges_c(&c);
         let top_left = line_start_n(&c, l0) + c0.min(le(&c, line_start_n(&c, l0)) - line_start_n(&c, l0));
         match k {
+            // leave block mode, cursor stays where it is (like Vim)
+            VKey::Esc | VKey::Ctrl('c') | VKey::Ctrl('[') => {
+                self.mode = Mode::Normal;
+                self.block_eol = false;
+                Step::Done
+            }
             VKey::Ch('o') | VKey::Ch('O') => {
                 std::mem::swap(&mut self.anchor, &mut self.pos);
                 Step::Done
@@ -1895,6 +1901,12 @@ mod tests {
 
     #[test]
     fn visual_block() {
+        // Esc leaves block mode without changing the text; the cursor stays
+        let (txt, p, v) = run("abc\nabc\nabc", 0, "<c-v>jl<esc>");
+        assert_eq!((txt.as_str(), p, v.mode), ("abc\nabc\nabc", 5, Mode::Normal));
+        assert_eq!(run("abc\nabc", 0, "<c-v>j<c-c>").2.mode, Mode::Normal);
+        // after Esc, normal commands work again (x deletes one char, not the block)
+        assert_eq!(run("abc\nabc", 0, "<c-v>jl<esc>x").0, "abc\nac");
         // comment out three lines with Ctrl-v j j I % Esc
         assert_eq!(run("a\nb\nc", 0, "<c-v>jjI% <esc>").0, "% a\n% b\n% c");
         // delete a column
