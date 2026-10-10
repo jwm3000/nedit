@@ -35,6 +35,8 @@ pub struct Buffer {
     pub last_edit: f64,
     pub completion: Option<Completion>,
     pub request_focus: bool,
+    /// Frames the focus request has been retried (gives up after a few).
+    focus_tries: u8,
     pub cursor_moved: bool,
 }
 
@@ -80,6 +82,7 @@ impl Buffer {
             last_edit: 0.0,
             completion: None,
             request_focus: false,
+            focus_tries: 0,
             cursor_moved: false,
         })
     }
@@ -1062,12 +1065,23 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
     }
     // Focus is requested only once no mouse button is pressed: a click elsewhere (file tree,
     // quick open, tabs) would otherwise take the focus away again in the same frame.
+    //
+    // The request is repeated until the editor really has the focus: right after a modal
+    // (quick open, dialogs) closes, egui still treats it as open for one frame and ignores
+    // focus requests for widgets behind it.
     if buf.request_focus {
-        if ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released()) {
+        if ctx.memory(|m| m.has_focus(buf.id)) {
+            buf.request_focus = false;
+            buf.focus_tries = 0;
+        } else if ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released()) {
             ctx.request_repaint();
+        } else if buf.focus_tries > 10 {
+            buf.request_focus = false;
+            buf.focus_tries = 0;
         } else {
             ctx.memory_mut(|m| m.request_focus(buf.id));
-            buf.request_focus = false;
+            buf.focus_tries += 1;
+            ctx.request_repaint();
         }
     }
 

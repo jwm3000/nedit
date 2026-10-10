@@ -1144,6 +1144,31 @@ impl eframe::App for App {
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
                 if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
+                    if name.contains("qenter") && self.debug_typed < 7040 {
+                        // Ctrl+P, type "methodik", Enter, then type text and report focus
+                        if self.debug_typed < 7000 {
+                            self.debug_typed = 7000;
+                        }
+                        let k = self.debug_typed - 7000;
+                        let foc = self.thesis.active.as_ref().and_then(|a| self.buffer_idx(a)).map(|i| self.buffers[i].id) == ctx.memory(|m| m.focused()).filter(|_| true);
+                        eprintln!("QSTEP k={k} quick={:?} active={:?} editor_focus={foc}", self.quick.as_ref().map(|q| q.query.clone()), self.thesis.active);
+                        let key = |key: egui::Key, m: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m };
+                        match k {
+                            0 => raw.events.push(key(egui::Key::P, egui::Modifiers::COMMAND)),
+                            3 => raw.events.push(egui::Event::Text("design.tex".into())),
+                            6 => raw.events.push(key(egui::Key::Enter, egui::Modifiers::NONE)),
+                            12 => raw.events.push(egui::Event::Text("iXYZ".into())),
+                            16 => {
+                                let active = self.thesis.active.clone().unwrap_or_default();
+                                let focused = ctx.memory(|m| m.focused());
+                                let bid = self.buffer_idx(&active).map(|i| self.buffers[i].id);
+                                let typed = self.buffer_idx(&active).is_some_and(|i| self.buffers[i].text.contains("XYZ"));
+                                eprintln!("QENTER active={active} focus_on_editor={} typed={typed}", focused.is_some() && focused == bid);
+                            }
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
                     if name.contains("sltype") && self.debug_typed < 6060 {
                         // visual slide editor: focus first list item of slide 3, Enter, type
                         if self.debug_typed < 6000 {
