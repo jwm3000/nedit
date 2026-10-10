@@ -38,11 +38,13 @@ pub struct Settings {
     pub diff_split: bool,
     /// Presentation: visual slide editor instead of LaTeX code.
     pub slides_visual: bool,
+    /// Presentation: rendered slide (stage) next to the editor.
+    pub show_stage: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true }
     }
 }
 
@@ -389,6 +391,24 @@ impl App {
         self.doc_mode = on;
         if on {
             self.rebuild_indexes();
+        }
+    }
+
+    /// PDF preview on/off for whatever is visible: document mode, full screen (floating PDF),
+    /// the standard thesis view or the presentation stage.
+    pub fn toggle_pdf_preview(&mut self) {
+        match self.tab {
+            Tab::Thesis if self.focus => self.focus_pdf = !self.focus_pdf,
+            Tab::Thesis if self.doc_mode => self.doc_pdf = !self.doc_pdf,
+            Tab::Thesis => {
+                self.settings.show_pdf = !self.settings.show_pdf;
+                self.settings.save();
+            }
+            Tab::Slides => {
+                self.settings.show_stage = !self.settings.show_stage;
+                self.settings.save();
+            }
+            Tab::Shelf => {}
         }
     }
 
@@ -1015,6 +1035,10 @@ impl App {
         if esc && self.focus && ctx.memory(|m| m.focused().is_none()) && self.dialog.is_none() {
             self.set_focus(false, ctx);
         }
+        // Ctrl+L: toggle the PDF preview of the current view
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::L)) {
+            self.toggle_pdf_preview();
+        }
         // Ctrl+Tab / Ctrl+Shift+Tab: next / previous file (document mode: next chapter)
         let (tab_prev, tab_next) = ctx.input_mut(|i| {
             let prev = i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Tab);
@@ -1144,6 +1168,31 @@ impl eframe::App for App {
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
                 if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
+                    if name.contains("keys") && self.debug_typed < 8012 {
+                        // Ctrl+V as a plain key (empty clipboard) and Ctrl+L
+                        if self.debug_typed < 8000 {
+                            self.debug_typed = 8000;
+                            self.settings.input_vim = true;
+                            if let Some(a) = self.thesis.active.clone() {
+                                if let Some(i) = self.buffer_idx(&a) {
+                                    self.buffers[i].request_focus = true;
+                                }
+                            }
+                        }
+                        let k = self.debug_typed - 8000;
+                        let key = |key: egui::Key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+                        match k {
+                            4 => raw.events.push(key(egui::Key::V)),
+                            6 => eprintln!("KEYS after Ctrl+V: vim mode = {:?}", self.vim.mode),
+                            7 => {
+                                eprintln!("KEYS show_pdf before = {}", self.settings.show_pdf);
+                                raw.events.push(key(egui::Key::L));
+                            }
+                            9 => eprintln!("KEYS show_pdf after Ctrl+L = {}", self.settings.show_pdf),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
                     if name.contains("qenter") && self.debug_typed < 7040 {
                         // Ctrl+P, type "methodik", Enter, then type text and report focus
                         if self.debug_typed < 7000 {

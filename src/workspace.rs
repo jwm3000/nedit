@@ -90,12 +90,14 @@ pub fn slides_ui(app: &mut App, ui: &mut Ui, now: f64) {
         .show(ui, |ui| filmstrip(app, ui, &pal, now));
     let w = ui.available_width();
     let sw = (w * app.settings.stage_frac).clamp(300.0, (w - 340.0).max(300.0));
-    let panel = egui::Panel::right("stage")
-        .resizable(false)
-        .exact_size(sw)
-        .show_separator_line(false)
-        .frame(Frame::new().fill(pal.crust))
-        .show(ui, |ui| stage(app, ui, &pal, now));
+    let panel = app.settings.show_stage.then(|| {
+        egui::Panel::right("stage")
+            .resizable(false)
+            .exact_size(sw)
+            .show_separator_line(false)
+            .frame(Frame::new().fill(pal.crust))
+            .show(ui, |ui| stage(app, ui, &pal, now))
+    });
     egui::CentralPanel::default().frame(Frame::new().fill(pal.base)).show(ui, |ui| {
         if app.settings.slides_visual {
             app.slide_editor_ui(ui, now);
@@ -103,7 +105,7 @@ pub fn slides_ui(app: &mut App, ui: &mut Ui, now: f64) {
             editor_area(app, ui, &pal, Tab::Slides, now);
         }
     });
-    if let Some(f) = splitter(ui, panel.response.rect, w, &pal, "split-stage") {
+    if let Some(f) = panel.and_then(|p| splitter(ui, p.response.rect, w, &pal, "split-stage")) {
         app.settings.stage_frac = (app.settings.stage_frac + f).clamp(0.2, 0.8);
         if f == 0.0 {
             app.settings.save();
@@ -565,13 +567,13 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         }
         if !app.doc_mode {
             let on = app.settings.show_pdf;
-            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("PDF-Vorschau ein/aus" | "Toggle PDF preview"), pal, on, 28.0).clicked() {
+            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("PDF-Vorschau ein/aus (Strg+L)" | "Toggle PDF preview (Ctrl+L)"), pal, on, 28.0).clicked() {
                 app.settings.show_pdf = !on;
                 app.settings.save();
             }
         }
         if app.doc_mode {
-            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("PDF-Vorschau ein/aus" | "Toggle PDF preview"), pal, app.doc_pdf, 28.0).clicked() {
+            if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("PDF-Vorschau ein/aus (Strg+L)" | "Toggle PDF preview (Ctrl+L)"), pal, app.doc_pdf, 28.0).clicked() {
                 app.doc_pdf = !app.doc_pdf;
             }
             if widgets::icon_button_sized(&mut right, ic::LIST, tr!("Inhaltsverzeichnis ein/aus" | "Toggle table of contents"), pal, app.doc_toc, 28.0).clicked() {
@@ -589,6 +591,9 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         view_switch(app, &mut right, pal, &ctx, inner.width() < 640.0);
     }
     if t == Tab::Slides {
+        if widgets::icon_button_sized(&mut right, ic::FILE_PDF, tr!("Folienvorschau ein/aus (Strg+L)" | "Toggle slide preview (Ctrl+L)"), pal, app.settings.show_stage, 28.0).clicked() {
+            app.toggle_pdf_preview();
+        }
         let r = right.allocate_exact_size(vec2(10.0, 20.0), Sense::hover()).0;
         right.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
         if widgets::chip(&mut right, ic::EYE, tr!("Visuell" | "Visual"), false, pal.accent, pal).on_hover_text(tr!("Folien wie in PowerPoint bearbeiten" | "Edit slides like in PowerPoint")).clicked() {
