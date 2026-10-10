@@ -43,6 +43,7 @@ fn sections() -> Vec<Section> {
             rows: vec![
                 ("Ctrl+E", tr!("Code ↔ Visuell" | "Code ↔ visual")),
                 ("Ctrl+L", tr!("PDF-Vorschau ein/aus" | "Toggle PDF preview")),
+                ("Ctrl+D", tr!("Git-Diff der Datei nebeneinander ein/aus" | "Side-by-side git diff of the file on/off")),
                 ("Ctrl+Shift+D", tr!("Dokument-Modus (alle Kapitel am Stück)" | "Document mode (all chapters in one view)")),
                 ("Ctrl+Tab", tr!("Nächste Datei – im Dokument-Modus nächstes Kapitel" | "Next file – next chapter in document mode")),
                 ("Ctrl+Shift+Tab", tr!("Vorherige Datei / vorheriges Kapitel" | "Previous file / chapter")),

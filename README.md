@@ -274,6 +274,7 @@ Rust-Bibliotheken (werden von Cargo automatisch geladen): `eframe`/`egui` (Oberf
 | F1 | Hilfe mit allen Tastenkürzeln (Deutsch/Englisch) |
 | Strg+E | Code ↔ Visuell |
 | Strg+L | PDF-Vorschau ein/aus |
+| Strg+D | Git-Diff der Datei nebeneinander ein/aus |
 | Strg+Umschalt+D | Dokument-Modus |
 | F11 / Esc | Vollbild (nur Text) |
 | Strg+F | Suchen & Ersetzen |

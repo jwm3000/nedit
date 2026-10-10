@@ -194,6 +194,7 @@ pub struct App {
     pub slides: Workspace,
     pub renderer: Renderer,
     pub side: SideMode,
+    prev_side: SideMode,
     pub tree: Vec<FileNode>,
     pub flat: Vec<String>,
     pub outline: Vec<OutlineItem>,
@@ -276,6 +277,7 @@ impl App {
             slides: Workspace::new(Tab::Slides),
             renderer: Renderer::new(3),
             side: SideMode::Files,
+            prev_side: SideMode::Files,
             tree: vec![],
             flat: vec![],
             outline: vec![],
@@ -392,6 +394,30 @@ impl App {
         if on {
             self.rebuild_indexes();
         }
+    }
+
+    /// Ctrl+D: side-by-side git diff of the current thesis file on/off.
+    pub fn toggle_file_diff(&mut self, now: f64) {
+        if self.git.view.is_some() {
+            self.git.view = None;
+            if let Some(i) = self.thesis.active.clone().and_then(|a| self.buffer_idx(&a)) {
+                self.buffers[i].request_focus = true;
+            }
+            return;
+        }
+        if !self.git.is_repo {
+            let c = self.pal.yellow;
+            self.toast(ic::GIT, tr!("Kein Git-Repository – im Git-Panel anlegen" | "No git repository – create one in the Git panel"), c, now);
+            return;
+        }
+        let Some(rel) = self.thesis.active.clone() else { return };
+        self.save_all();
+        let root = self.project.root.clone();
+        self.git.refresh_status(&root, now);
+        self.tab = Tab::Thesis;
+        self.settings.diff_split = true;
+        self.settings.save();
+        self.git.open_working_diff(&root, &rel);
     }
 
     /// PDF preview on/off for whatever is visible: document mode, full screen (floating PDF),
@@ -1011,14 +1037,20 @@ impl App {
                 i.consume_key(Modifiers::COMMAND, Key::Minus),
             )
         });
-        let (f11, ctrl_e, esc, doc_key) = ctx.input_mut(|i| {
-            (
-                i.consume_key(Modifiers::NONE, Key::F11),
-                i.consume_key(Modifiers::COMMAND, Key::E),
-                i.key_pressed(Key::Escape),
-                i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::D),
-            )
+        let (f11, ctrl_e, esc, doc_key, diff_key) = ctx.input_mut(|i| {
+            let doc = i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::D);
+            // Ctrl+D (without Shift): git diff of the current file
+            let diff = !i.modifiers.shift && i.consume_key(Modifiers::COMMAND, Key::D);
+            (i.consume_key(Modifiers::NONE, Key::F11), i.consume_key(Modifiers::COMMAND, Key::E), i.key_pressed(Key::Escape), doc, diff)
         });
+        if diff_key {
+            self.toggle_file_diff(now);
+        }
+        // leaving the git panel closes an open diff
+        if self.prev_side == SideMode::Git && self.side != SideMode::Git {
+            self.git.view = None;
+        }
+        self.prev_side = self.side;
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
             self.help_open = !self.help_open;
         }
@@ -1168,6 +1200,26 @@ impl eframe::App for App {
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
                 if let Some((name, _)) = steps.split(',').nth(self.shot_step).and_then(|s| s.split_once('@')) {
+                    if name.contains("ctrld") && self.debug_typed < 9020 {
+                        if self.debug_typed < 9000 {
+                            self.debug_typed = 9000;
+                        }
+                        let k = self.debug_typed - 9000;
+                        match k {
+                            3 => raw.events.push(egui::Event::Key { key: egui::Key::D, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }),
+                            6 => {
+                                eprintln!("CTRLD view_open={} split={}", self.git.view.is_some(), self.settings.diff_split);
+                                self.side = SideMode::Git;
+                            }
+                            9 => self.side = SideMode::Files,
+                            12 => eprintln!("CTRLD after leaving git: view_open={}", self.git.view.is_some()),
+                            _ => {}
+                        }
+                        if k < 7 || k > 12 {
+                            // keep the diff visible for the screenshot at k=5
+                        }
+                        self.debug_typed += 1;
+                    }
                     if name.contains("keys") && self.debug_typed < 8012 {
                         // Ctrl+V as a plain key (empty clipboard) and Ctrl+L
                         if self.debug_typed < 8000 {
