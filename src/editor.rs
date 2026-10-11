@@ -1106,11 +1106,13 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
     // (quick open, dialogs) closes, egui still treats it as open for one frame and ignores
     // focus requests for widgets behind it.
     if buf.request_focus {
-        if ctx.memory(|m| m.has_focus(buf.id)) {
+        // while a click is in progress the editor may still look focused, but egui takes the
+        // focus away at the end of that click ("clicked elsewhere") – decide afterwards
+        if ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released()) {
+            ctx.request_repaint();
+        } else if ctx.memory(|m| m.has_focus(buf.id)) {
             buf.request_focus = false;
             buf.focus_tries = 0;
-        } else if ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released()) {
-            ctx.request_repaint();
         } else if buf.focus_tries > 10 {
             buf.request_focus = false;
             buf.focus_tries = 0;

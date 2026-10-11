@@ -618,7 +618,12 @@ fn editor_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
             let r = child.allocate_exact_size(vec2(10.0, 20.0), Sense::hover()).0;
             child.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, pal.border));
         }
-        if widgets::icon_button_sized(&mut child, icon, crate::i18n::t(tip), pal, false, 28.0).clicked() {
+        let resp = widgets::icon_button_sized(&mut child, icon, crate::i18n::t(tip), pal, false, 28.0);
+        if std::env::var_os("NEDIT_SHOT").is_some() {
+            // screenshot tests click toolbar buttons by name
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("dbg-toolbar", *tip)), resp.rect));
+        }
+        if resp.clicked() {
             app.insert_snippet(t, snip);
         }
     }

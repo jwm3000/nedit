@@ -1278,6 +1278,62 @@ impl eframe::App for App {
                         }
                         self.debug_typed += 1;
                     }
+                    if name.contains("click") && self.debug_typed < 12040 {
+                        // real mouse click on a toolbar button, then type
+                        if self.debug_typed < 12000 {
+                            self.debug_typed = 12000;
+                            self.settings.input_vim = true;
+                        }
+                        let k = self.debug_typed - 12000;
+                        let which = name.split("click=").nth(1).and_then(|s| s.split(['-', '@']).next()).unwrap_or("img").to_string();
+                        let tip = match which.as_str() {
+                            "bold" => "Fett (Strg+B)",
+                            "list" => "Aufzählung",
+                            "sec" => "Abschnitt",
+                            _ => "Abbildung",
+                        };
+                        let rel = self.thesis.active.clone().unwrap_or_default();
+                        let rect: Option<egui::Rect> = ctx.data(|d| d.get_temp(egui::Id::new(("dbg-toolbar", tip))));
+                        match (k, rect) {
+                            (1, _) => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &mut self.buffers[i];
+                                    let p = b.text.find("Since the Bavarian").map(|p| b.text[..p].chars().count()).unwrap_or(10);
+                                    b.select(p, p);
+                                }
+                            }
+                            (5, Some(r)) => raw.events.push(egui::Event::PointerMoved(r.center())),
+                            (6, Some(r)) => raw.events.push(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }),
+                            (8, Some(r)) => raw.events.push(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }),
+                            (9..=13, _) => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &self.buffers[i];
+                                    eprintln!("CLICKF k={k} inserted={} reqfocus={} focused={:?} buf={:?} want={}", b.text.contains("\\begin{figure}") || b.text.contains("textbf{}") || b.text.contains("itemize"), b.request_focus, ctx.memory(|m| m.focused()), b.id, b.want_completion);
+                                }
+                            }
+                            (14, _) => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &self.buffers[i];
+                                    eprintln!("CLICK {which} focus={} vim={:?} popup={:?}", ctx.memory(|m| m.has_focus(b.id)), self.vim.mode, b.completion.as_ref().map(|c| c.items.len()));
+                                }
+                                if which != "img" {
+                                    raw.events.push(egui::Event::Text("NEU".into()));
+                                }
+                            }
+                            (15, _) if which == "img" => raw.events.push(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }),
+                            (17, _) if which == "img" => raw.events.push(egui::Event::Text("NEU".into())),
+                            (20, _) => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &self.buffers[i];
+                                    let p = b.text.find("NEU").unwrap_or(0);
+                                    let a = b.text[..p].rfind("mankind").unwrap_or(p.saturating_sub(80));
+                                    eprintln!("CLICK {which} text:\n{}\n---", &b.text[a..(p + 40).min(b.text.len())]);
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
                     if name.contains("snip") && self.debug_typed < 11030 {
                         // toolbar insert: cursor mid-line, insert a snippet, then type
                         if self.debug_typed < 11000 {
@@ -2099,7 +2155,7 @@ impl App {
         if name.contains("visual") {
             self.settings.visual = true;
         }
-        if !name.contains("comp") && !name.contains("snip") {
+        if !name.contains("comp") && !name.contains("snip") && !name.contains("click") {
             if let Some(b) = self.active_buffer_mut(Tab::Thesis) {
                 b.completion = None;
             }
