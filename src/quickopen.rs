@@ -1,4 +1,4 @@
-//! Quick open (double Shift / Ctrl+P): one floating input to jump to files, headings,
+//! Quick open (Ctrl+P): one floating input to jump to files, headings,
 //! literature and commands with fuzzy matching.
 
 use crate::app::{App, SideMode, Tab};
@@ -14,19 +14,6 @@ pub struct QuickOpen {
     pub selected: usize,
     pub opened_at: f64,
     focus: bool,
-}
-
-/// Double-Shift detection state.
-pub struct ShiftTap {
-    prev_down: bool,
-    last_tap: f64,
-    down_since: f64,
-}
-
-impl Default for ShiftTap {
-    fn default() -> Self {
-        Self { prev_down: false, last_tap: -10.0, down_since: -10.0 }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,63 +145,9 @@ impl App {
         }
     }
 
-    /// Ctrl+P and two short Shift taps toggle the quick bar.
-    ///
-    /// Shift is tracked from the modifier events (replayed in order – a quick tap often
-    /// arrives as press *and* release in one frame) and, as a fallback, from the modifier
-    /// state of each frame, in case an input method swallows single events.
+    /// Ctrl+P toggles the quick bar.
     pub fn quick_shortcut(&mut self, ctx: &egui::Context, now: f64) {
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P)) {
-            self.toggle_quick(now);
-            self.shift_tap = ShiftTap::default();
-            return;
-        }
-        let (events, state) = ctx.input(|i| (i.events.clone(), i.modifiers));
-        let mut transitions: Vec<Modifiers> = vec![];
-        let mut cancel = false;
-        for e in &events {
-            match e {
-                egui::Event::ModifiersChanged(m) => transitions.push(*m),
-                // any real key, text or click between the taps cancels the gesture
-                egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::PointerButton { pressed: true, .. } | egui::Event::Paste(_) => cancel = true,
-                _ => {}
-            }
-        }
-        if transitions.is_empty() && state.shift != self.shift_tap.prev_down {
-            transitions.push(state);
-        }
-        let log = std::env::var_os("NEDIT_KEYLOG").is_some();
-        let mut toggle = false;
-        let st = &mut self.shift_tap;
-        if cancel {
-            st.last_tap = -10.0;
-            st.down_since = -10.0;
-        }
-        for m in transitions {
-            let only_shift = m.shift && !m.ctrl && !m.alt && !m.command && !m.mac_cmd;
-            if m.shift && !st.prev_down {
-                // press: counts only without other modifiers
-                st.down_since = if only_shift { now } else { -10.0 };
-            } else if !m.shift && st.prev_down {
-                // release: a short press is a tap; two taps close together toggle the bar
-                let short = st.down_since >= 0.0 && now - st.down_since < 0.5;
-                if short && now - st.last_tap < 0.7 {
-                    st.last_tap = -10.0;
-                    toggle = true;
-                } else if short {
-                    st.last_tap = now;
-                } else {
-                    st.last_tap = -10.0;
-                }
-            } else if m.shift && !only_shift {
-                st.down_since = -10.0;
-            }
-            st.prev_down = m.shift;
-        }
-        if log && (toggle || !events.is_empty() && events.iter().any(|e| matches!(e, egui::Event::ModifiersChanged(_)))) {
-            eprintln!("QS now={now:.3} shift={} last_tap={:.3} toggle={toggle}", st.prev_down, st.last_tap);
-        }
-        if toggle {
             self.toggle_quick(now);
         }
     }
@@ -616,9 +549,6 @@ impl App {
                 );
                 ui.painter().text(pos2(fr.min.x + 18.0, fr.center().y), Align2::LEFT_CENTER, hint, widgets::ui_font(11.0), pal.dim);
             });
-        if std::env::var_os("NEDIT_KEYLOG").is_some() && (modal.should_close() || close) {
-            eprintln!("QS quick closing: esc={esc} enter={enter} backdrop/esc={}", modal.should_close());
-        }
         if modal.should_close() {
             close = true;
         }

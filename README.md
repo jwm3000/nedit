@@ -60,9 +60,9 @@ Normal/Insert/Visual/Visual-Line, Zähler, Bewegungen (`hjkl w b e W B E 0 ^ $ g
 `:%s/alt/neu/g` und `:noh`. **Strg+V** startet die Block-Auswahl (`d y c r ~ > < I A $`) –
 z. B. `Strg+V jj I% Esc` kommentiert drei Zeilen aus. Der Modus steht als Badge in der Statusleiste.
 
-### 🔎 Schnellsuche (2× Umschalt)
+### 🔎 Schnellsuche (Strg+P)
 
-Zweimal kurz **Umschalt** drücken (oder **Strg+P**) öffnet ein schwebendes Suchfeld über
+**Strg+P** öffnet (und schließt) ein schwebendes Suchfeld über
 allem: zuletzt geöffnete Dateien, alle Projektdateien, Kapitel und Abschnitte (aus Arbeit
 und Folien), Literatur (Enter fügt `\citep{…}` ein) und Befehle – mit Unschärfesuche.
 Präfixe: `#` Gliederung, `@` Literatur, `>` Befehle, `:42` springt zu Zeile 42.
@@ -269,7 +269,7 @@ Rust-Bibliotheken (werden von Cargo automatisch geladen): `eframe`/`egui` (Oberf
 | --- | --- |
 | Strg+S | Speichern & kompilieren (PDF springt zur Cursorstelle) |
 | Strg+Enter | Kompilieren |
-| 2× Umschalt / Strg+P | Schnellsuche (Dateien, Kapitel, Literatur, Befehle) |
+| Strg+P | Schnellsuche (Dateien, Kapitel, Literatur, Befehle) |
 | Strg+Tab / Strg+Umschalt+Tab | Nächste / vorherige Datei (Dokument-Modus: Kapitel) |
 | F1 | Hilfe mit allen Tastenkürzeln (Deutsch/Englisch) |
 | Strg+E | Code ↔ Visuell |

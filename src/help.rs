@@ -18,7 +18,7 @@ fn sections() -> Vec<Section> {
             icon: ic::BOLT,
             title: tr!("Allgemein" | "General"),
             rows: vec![
-                ("2× Shift / Ctrl+P", tr!("Schnellsuche: Dateien, Kapitel, Literatur, Befehle" | "Quick open: files, chapters, literature, commands")),
+                ("Ctrl+P", tr!("Schnellsuche: Dateien, Kapitel, Literatur, Befehle" | "Quick open: files, chapters, literature, commands")),
                 ("Ctrl+S", tr!("Speichern & kompilieren – PDF springt zur Cursorstelle" | "Save & compile – PDF jumps to the cursor")),
                 ("Ctrl+Enter", tr!("Kompilieren" | "Compile")),
                 ("Alt+1 / 2 / 3", tr!("Masterarbeit / Präsentation / Bibliothek" | "Thesis / presentation / library")),
