@@ -13,18 +13,20 @@ pub enum Page {
     Appearance,
     Editor,
     Project,
+    System,
     General,
 }
 
 impl Page {
-    fn all() -> [Page; 4] {
-        [Page::Appearance, Page::Editor, Page::Project, Page::General]
+    fn all() -> [Page; 5] {
+        [Page::Appearance, Page::Editor, Page::Project, Page::System, Page::General]
     }
     fn icon(self) -> &'static str {
         match self {
             Page::Appearance => ic::BRUSH,
             Page::Editor => ic::PENCIL,
             Page::Project => ic::GRADUATION,
+            Page::System => ic::CUBE,
             Page::General => ic::COG,
         }
     }
@@ -33,6 +35,7 @@ impl Page {
             Page::Appearance => tr!("Darstellung" | "Appearance"),
             Page::Editor => "Editor",
             Page::Project => tr!("Projekt" | "Project"),
+            Page::System => tr!("TeX & Werkzeuge" | "TeX & tools"),
             Page::General => tr!("Allgemein" | "General"),
         }
     }
@@ -41,6 +44,7 @@ impl Page {
             Page::Appearance => tr!("Theme und Schrift" | "Theme and font"),
             Page::Editor => tr!("Eingabe und Kompilieren" | "Input and compiling"),
             Page::Project => tr!("Compiler und Präsentation" | "Compiler and presentation"),
+            Page::System => tr!("Was fehlt und wie installieren" | "What is missing and how to install"),
             Page::General => tr!("Sprache, Updates, Hilfe" | "Language, updates, help"),
         }
     }
@@ -394,6 +398,7 @@ impl App {
                         Page::Appearance => self.page_appearance(ui, pal, ctx),
                         Page::Editor => self.page_editor(ui, pal),
                         Page::Project => self.page_project(ui, pal),
+                        Page::System => self.page_system(ui, pal, ctx),
                         Page::General => self.page_general(ui, pal, ctx),
                     }
                     ui.add_space(16.0);
@@ -516,6 +521,88 @@ impl App {
         });
         if changed {
             let _ = self.project.save_config();
+        }
+    }
+
+    fn page_system(&mut self, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
+        let Some(rep) = self.deps.clone() else {
+            ui.add_space(20.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new(tr!("Prüfe die TeX-Installation …" | "Checking the TeX installation …")).color(pal.dim));
+            });
+            return;
+        };
+        // summary
+        heading(ui, pal, tr!("System" | "System"));
+        let mut recheck = false;
+        card(ui, pal, |ui| {
+            let missing = rep.missing();
+            let req = rep.missing_required();
+            let (icon, col, text) = if missing == 0 {
+                (ic::CHECK_CIRCLE, pal.green, tr!("Alles installiert – nEdit ist startklar." | "Everything installed – nEdit is ready.").to_string())
+            } else if req == 0 {
+                (ic::CHECK_CIRCLE, pal.green, trf!("Alles Nötige ist da · {missing} optionale Komponente(n) fehlen" | "All required parts present · {missing} optional component(s) missing"))
+            } else {
+                (ic::WARN, pal.yellow, trf!("{req} benötigte Komponente(n) fehlen" | "{req} required component(s) missing"))
+            };
+            let sys = if rep.pm.label().is_empty() { rep.os.clone() } else { format!("{} · {}", rep.os, rep.pm.label()) };
+            row(ui, pal, &format!("{icon}  {text}"), &sys, |ui| {
+                recheck = widgets::button(ui, ic::REFRESH, tr!("Erneut prüfen" | "Check again"), pal, widgets::BtnKind::Secondary).clicked();
+            });
+            let _ = col;
+            if let Some(all) = rep.install_all() {
+                divider(ui, pal);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(tr!("Alles Fehlende auf einmal installieren:" | "Install everything missing at once:")).font(widgets::ui_font(12.0)).color(pal.subtext));
+                command_box(ui, pal, &all, ctx);
+                ui.add_space(6.0);
+            }
+        });
+        if recheck {
+            self.deps = None;
+            self.recheck_deps(ctx);
+            return;
+        }
+        for (title, required) in [(tr!("Benötigt" | "Required"), true), (tr!("Optional" | "Optional"), false)] {
+            heading(ui, pal, title);
+            card(ui, pal, |ui| {
+                let items: Vec<_> = rep.items.iter().filter(|c| c.required == required).collect();
+                for (i, c) in items.iter().enumerate() {
+                    if i > 0 {
+                        divider(ui, pal);
+                    }
+                    let (icon, col) = if c.ok { (ic::CHECK, pal.green) } else if c.required { (ic::TIMES, pal.red) } else { (ic::CIRCLE_O, pal.yellow) };
+                    let w = ui.available_width();
+                    ui.allocate_ui_with_layout(vec2(w, 44.0), egui::Layout::left_to_right(Align::Center), |ui| {
+                        ui.set_min_height(44.0);
+                        let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+                        ui.painter().circle_filled(r.center(), 11.0, with_alpha(col, 40));
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, icon, widgets::ui_font(11.0), col);
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.add_space(3.0);
+                            ui.label(egui::RichText::new(c.name).font(widgets::bold_font(13.5)).color(pal.bright));
+                            ui.label(egui::RichText::new(c.purpose).font(widgets::ui_font(11.5)).color(pal.dim));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if c.ok {
+                                ui.label(egui::RichText::new(tr!("installiert" | "installed")).font(widgets::ui_font(11.5)).color(pal.green));
+                            } else if let Some(l) = c.link {
+                                if widgets::button(ui, ic::EXTERNAL, tr!("Download" | "Download"), pal, widgets::BtnKind::Ghost).on_hover_text(l).clicked() {
+                                    ctx.open_url(egui::OpenUrl::new_tab(l));
+                                }
+                            }
+                        });
+                    });
+                    if !c.ok {
+                        if let Some(cmd) = &c.command {
+                            command_box(ui, pal, cmd, ctx);
+                            ui.add_space(6.0);
+                        }
+                    }
+                }
+            });
         }
     }
 
@@ -828,5 +915,34 @@ impl App {
             self.open_settings(None, ctx);
             ui.close();
         }
+    }
+}
+
+/// A copyable command in a mono box.
+fn command_box(ui: &mut Ui, pal: &Palette, cmd: &str, ctx: &egui::Context) {
+    let w = ui.available_width();
+    let font = widgets::mono_font(12.0);
+    let g = ui.painter().layout(cmd.to_string(), font, pal.text, w - 110.0);
+    let h = g.size().y + 16.0;
+    let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    ui.painter().rect_filled(r, 8.0, mix(pal.crust, pal.base, 0.3));
+    ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, with_alpha(pal.border, 120)), StrokeKind::Inside);
+    ui.painter().text(pos2(r.min.x + 12.0, r.min.y + 8.0 + g.size().y / 2.0), Align2::LEFT_CENTER, "$", widgets::mono_font(12.0), pal.dim);
+    ui.painter().galley(pos2(r.min.x + 28.0, r.min.y + 8.0), g, pal.text);
+    let br = Rect::from_min_size(pos2(r.max.x - 80.0, r.center().y - 13.0), vec2(72.0, 26.0));
+    let id = Id::new(("copy-cmd", cmd));
+    let resp = ui.interact(br, id, Sense::click());
+    let copied_at: Option<f64> = ctx.data(|d| d.get_temp(id));
+    let now = ctx.input(|i| i.time);
+    let copied = copied_at.is_some_and(|t| now - t < 1.6);
+    ui.painter().rect_filled(br, 7.0, if copied { with_alpha(pal.green, 40) } else if resp.hovered() { with_alpha(pal.accent, 50) } else { with_alpha(pal.accent, 26) });
+    let label = if copied { format!("{}  {}", ic::CHECK, tr!("Kopiert" | "Copied")) } else { format!("{}  {}", ic::COPY, tr!("Kopieren" | "Copy")) };
+    ui.painter().text(br.center(), Align2::CENTER_CENTER, label, widgets::ui_font(11.0), if copied { pal.green } else { mix(pal.accent, pal.bright, 0.3) });
+    if resp.clicked() {
+        ctx.copy_text(cmd.to_string());
+        ctx.data_mut(|d| d.insert_temp(id, now));
+    }
+    if copied {
+        ctx.request_repaint();
     }
 }

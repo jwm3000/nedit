@@ -133,7 +133,7 @@ fn add_hints(issues: &mut Vec<Issue>, latexmk_out: &str) {
                 file: None,
                 line: None,
                 message: tr!("biber ist nicht installiert – das Dokument nutzt biblatex mit backend=biber, daher fehlt das Literaturverzeichnis." | "biber is not installed – the document uses biblatex with backend=biber, so the bibliography is missing.").into(),
-                context: tr!("Installieren mit:  sudo pacman -S biber" | "Install with:  sudo pacman -S biber").into(),
+                context: trf!("Installieren mit:  {}" | "Install with:  {}", crate::deps::install_hint(crate::deps::Key::Biber)),
             },
         );
     }
@@ -142,14 +142,12 @@ fn add_hints(issues: &mut Vec<Issue>, latexmk_out: &str) {
         if is.message.contains("babel Error") {
             if let Some(c) = re.captures(&is.message) {
                 let lang = &c[1];
-                let pkg = match lang {
-                    "ngerman" | "german" | "austrian" | "naustrian" => "texlive-langgerman",
-                    "french" => "texlive-langfrench",
-                    "spanish" => "texlive-langspanish",
-                    "italian" => "texlive-langitalian",
-                    _ => "texlive-lang",
+                let hint = if matches!(lang, "ngerman" | "german" | "austrian" | "naustrian") {
+                    crate::deps::install_hint(crate::deps::Key::German)
+                } else {
+                    tr!("das Sprachpaket deiner TeX-Distribution" | "your TeX distribution's language package").to_string()
                 };
-                is.context = trf!("Die Sprache „{lang}“ fehlt in TeX Live. Installieren mit:  sudo pacman -S {pkg}\n\n{}" | "The language “{lang}” is missing in TeX Live. Install with:  sudo pacman -S {pkg}\n\n{}", is.context);
+                is.context = trf!("Die Sprache „{lang}“ fehlt in der TeX-Installation. Installieren mit:  {hint}\n\n{}" | "The language “{lang}” is missing in the TeX installation. Install with:  {hint}\n\n{}", is.context);
             }
         }
     }

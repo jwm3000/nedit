@@ -6,6 +6,7 @@ mod i18n;
 mod app;
 mod bib;
 mod compile;
+mod deps;
 mod editor;
 mod filetree;
 mod fonts;

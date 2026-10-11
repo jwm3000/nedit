@@ -237,6 +237,9 @@ pub struct App {
     pub vim: crate::vim::VimState,
     pub about_open: bool,
     pub help_open: bool,
+    /// System check (TeX components, tools) – runs in the background at start.
+    pub deps: Option<crate::deps::Report>,
+    deps_rx: Option<std::sync::mpsc::Receiver<crate::deps::Report>>,
     pub settings_open: bool,
     pub settings_page: crate::settings_ui::Page,
     pub slide_ed: crate::slide_ui::SlideEditor,
@@ -318,6 +321,8 @@ impl App {
             vim: Default::default(),
             about_open: false,
             help_open: false,
+            deps: None,
+            deps_rx: None,
             settings_open: false,
             settings_page: Default::default(),
             slide_ed: Default::default(),
@@ -416,6 +421,17 @@ impl App {
         self.settings.diff_split = true;
         self.settings.save();
         self.git.open_working_diff(&root, &rel);
+    }
+
+    /// Run the system check in the background.
+    pub fn recheck_deps(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let c = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::deps::check());
+            c.request_repaint();
+        });
+        self.deps_rx = Some(rx);
     }
 
     /// PDF preview on/off for whatever is visible: document mode, full screen (floating PDF),
@@ -954,6 +970,16 @@ impl App {
             }
         }
 
+        // system check once at start (and again on request)
+        if self.deps.is_none() && self.deps_rx.is_none() {
+            self.recheck_deps(ctx);
+        }
+        if let Some(rx) = &self.deps_rx {
+            if let Ok(r) = rx.try_recv() {
+                self.deps = Some(r);
+                self.deps_rx = None;
+            }
+        }
         if !self.update_started && now > 4.0 && self.settings.update_check && std::env::var_os("NEDIT_SHOT").is_none() {
             self.update_started = true;
             self.updater.check(false, ctx);
@@ -1663,6 +1689,16 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(small(format!("{}  {}", ic::BRUSH, self.pal.name), pal.dim));
                         ui.add_space(10.0);
+                        // missing TeX components → open the system page
+                        if let Some(n) = self.deps.as_ref().map(|d| d.missing_required()).filter(|n| *n > 0) {
+                            let txt = trf!("{} {n} TeX-Komponente(n) fehlen" | "{} {n} TeX component(s) missing", ic::WARN);
+                            let r = ui.add(egui::Label::new(small(txt, pal.yellow)).sense(egui::Sense::click())).on_hover_text(tr!("Anzeigen, was fehlt und wie man es installiert" | "Show what is missing and how to install it"));
+                            if r.clicked() {
+                                let ctx = ui.ctx().clone();
+                                self.open_settings(Some(crate::settings_ui::Page::System), &ctx);
+                            }
+                            ui.add_space(10.0);
+                        }
                         let ws = self.ws(doc);
                         if ws.job.is_some() {
                             ui.label(small(trf!("{} Kompiliere …" | "{} Compiling …", ic::REFRESH), pal.accent));
@@ -2192,7 +2228,7 @@ impl App {
             self.settings.slides_visual = true;
         }
         if name.contains("settings") {
-            let page = if name.contains("set-ed") { crate::settings_ui::Page::Editor } else if name.contains("set-gen") { crate::settings_ui::Page::General } else if name.contains("set-proj") { crate::settings_ui::Page::Project } else { crate::settings_ui::Page::Appearance };
+            let page = if name.contains("set-sys") { crate::settings_ui::Page::System } else if name.contains("set-ed") { crate::settings_ui::Page::Editor } else if name.contains("set-gen") { crate::settings_ui::Page::General } else if name.contains("set-proj") { crate::settings_ui::Page::Project } else { crate::settings_ui::Page::Appearance };
             if !self.settings_open {
                 self.open_settings(Some(page), ctx);
             }
