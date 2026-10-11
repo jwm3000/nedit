@@ -275,6 +275,11 @@ const THESIS_SNIPPETS: &[(&str, &str, &str)] = &[
     (ic::FILE_CODE, "Fußnote", "\\footnote{$0}"),
 ];
 
+/// Snippet text of a toolbar entry (used by tests).
+pub fn snippet_for(tip: &str) -> &'static str {
+    THESIS_SNIPPETS.iter().find(|s| s.1 == tip).map_or("", |s| s.2)
+}
+
 const SLIDE_SNIPPETS: &[(&str, &str, &str)] = &[
     (ic::SQUARE, "Neue Folie", "\\begin{frame}{$0Titel}\n  \\begin{itemize}\n    \\item \n  \\end{itemize}\n\\end{frame}\n\n"),
     (ic::COLUMNS, "Zwei Spalten", "\\begin{frame}{$0Titel}\n  \\begin{columns}[T]\n    \\begin{column}{0.48\\textwidth}\n      Links\n    \\end{column}\n    \\begin{column}{0.48\\textwidth}\n      Rechts\n    \\end{column}\n  \\end{columns}\n\\end{frame}\n\n"),

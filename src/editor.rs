@@ -35,6 +35,8 @@ pub struct Buffer {
     pub last_edit: f64,
     pub completion: Option<Completion>,
     pub request_focus: bool,
+    /// Open the completion popup once the editor has the focus (after a toolbar insert).
+    pub want_completion: bool,
     /// Frames the focus request has been retried (gives up after a few).
     focus_tries: u8,
     pub cursor_moved: bool,
@@ -82,6 +84,7 @@ impl Buffer {
             last_edit: 0.0,
             completion: None,
             request_focus: false,
+            want_completion: false,
             focus_tries: 0,
             cursor_moved: false,
         })
@@ -186,7 +189,37 @@ impl Buffer {
     pub fn insert_snippet(&mut self, snippet: &str) {
         let (a, b) = (self.cursor.min(self.sel_end), self.cursor.max(self.sel_end));
         let selected: String = self.text.chars().skip(a).take(b - a).collect();
-        let s = snippet.replace("$SEL", &selected);
+        let mut s = snippet.replace("$SEL", &selected);
+        // block snippets (sections, environments) always start on their own line and take
+        // over the indentation of the current line
+        if snippet.ends_with('\n') {
+            let chars: Vec<char> = self.text.chars().collect();
+            let mut ls = a.min(chars.len());
+            while ls > 0 && chars[ls - 1] != '\n' {
+                ls -= 1;
+            }
+            let indent: String = chars[ls..].iter().take_while(|c| **c == ' ' || **c == '\t').collect();
+            let before_on_line: String = chars[ls..a.min(chars.len())].iter().collect();
+            let body = s.trim_end_matches('\n').replace('\n', &format!("\n{indent}"));
+            s = if before_on_line.trim().is_empty() {
+                // empty line (or only indentation): no extra indentation for the first line
+                format!("{body}\n")
+            } else {
+                format!("\n{indent}{body}\n{indent}")
+            };
+            // don't leave a dangling space at the end of the previous line
+            if !before_on_line.trim().is_empty() && a > 0 && chars.get(a - 1) == Some(&' ') {
+                self.replace_chars(a - 1, a, "");
+                let (a2, b2) = (a - 1, b - 1);
+                let (clean, caret) = match s.find("$0") {
+                    Some(p) => (s.replacen("$0", "", 1), byte_to_char(&s, p)),
+                    None => (s.clone(), s.chars().count()),
+                };
+                self.replace_chars(a2, b2, &clean);
+                self.select(a2 + caret, a2 + caret);
+                return;
+            }
+        }
         let (clean, caret) = match s.find("$0") {
             Some(p) => (s.replacen("$0", "", 1), byte_to_char(&s, p)),
             None => (s.clone(), s.chars().count()),
@@ -779,7 +812,10 @@ fn compute_completion(text: &str, cursor: usize, src: &CompletionSources) -> Opt
                 CompKind::File,
                 src.files
                     .iter()
-                    .filter(|f| if cmd == "includegraphics" { !f.ends_with(".tex") } else { f.ends_with(".tex") })
+                    .filter(|f| {
+                        let l = f.to_lowercase();
+                        if cmd == "includegraphics" { [".png", ".jpg", ".jpeg", ".pdf", ".eps", ".svg"].iter().any(|e| l.ends_with(e)) && !l.starts_with("papers/") } else { l.ends_with(".tex") }
+                    })
                     .filter_map(|f| {
                         let ins = if cmd == "includegraphics" { f.clone() } else { f.trim_end_matches(".tex").to_string() };
                         fuzzy_score(f, prefix).map(|s| (s, CompItem { label: f.clone(), detail: String::new(), insert: ins }))
@@ -1151,6 +1187,12 @@ pub fn editor_ui(ui: &mut egui::Ui, buf: &mut Buffer, st: &EditorStyle, src: &Co
         }
     }
 
+    // after a toolbar insert: open the popup once the editor has the focus (after the vim
+    // handling above, which would otherwise close it again)
+    if buf.want_completion && !buf.request_focus && ctx.memory(|m| m.has_focus(buf.id)) {
+        buf.want_completion = false;
+        buf.completion = compute_completion(&buf.text, buf.cursor, src);
+    }
     // completion popup
     if let Some(comp) = &mut buf.completion {
         let crect = galley.pos_from_cursor(CCursor::new(buf.cursor)).translate(gpos.to_vec2());
@@ -1694,7 +1736,24 @@ fn apply_completion(buf: &mut Buffer, comp: &Completion, item: &CompItem) {
         end += 1;
     }
     buf.replace_chars(comp.start, end, &ins);
-    buf.select(comp.start + caret, comp.start + caret);
+    let mut target = comp.start + caret;
+    if matches!(comp.kind, CompKind::Cite | CompKind::Ref | CompKind::File) {
+        // continue after the closing brace; in a figure jump straight into \caption{}
+        let chars: Vec<char> = buf.text.chars().collect();
+        if chars.get(target) == Some(&'}') {
+            target += 1;
+        }
+        let rest: String = chars[target.min(chars.len())..].iter().take(200).collect();
+        if comp.kind == CompKind::File {
+            if let Some(p) = rest.find("\\caption{}") {
+                let before = &rest[..p];
+                if !before.contains("\\end{figure}") {
+                    target += before.chars().count() + "\\caption{".len();
+                }
+            }
+        }
+    }
+    buf.select(target, target);
 }
 
 fn comp_needs_scroll(ui: &egui::Ui, rect: Rect) -> bool {
@@ -1749,6 +1808,25 @@ mod completion_tests {
         let c = comp("see \\cref{fig").unwrap();
         assert_eq!(c.items[0].label, "fig:esters");
         assert!(!c.items[0].detail.is_empty());
+        // image files right after a toolbar insert (empty argument)
+        let files = vec!["figures/logo.pdf".to_string(), "chapter.tex".to_string(), "figures/photo.jpg".to_string()];
+        let (cites2, labels2) = (vec![], vec![]);
+        let src2 = CompletionSources { cites: &cites2, labels: &labels2, files: &files };
+        let t = "\\includegraphics[width=0.8\\linewidth]{";
+        let c = compute_completion(t, t.chars().count(), &src2).expect("image completion");
+        assert_eq!(c.items.len(), 2);
+        // accepting an image jumps into the empty \caption{}
+        let dir = std::env::temp_dir().join(format!("nedit-comp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("f.tex"), "\\includegraphics{}\n  \\caption{}\n").unwrap();
+        let mut b = Buffer::open(&dir, "f.tex").unwrap();
+        b.cursor = "\\includegraphics{".len();
+        b.sel_end = b.cursor;
+        let cc = compute_completion(&b.text, b.cursor, &src2).unwrap();
+        let item = cc.items[0].clone();
+        apply_completion(&mut b, &cc, &item);
+        assert_eq!(b.text, format!("\\includegraphics{{{}}}\n  \\caption{{}}\n", item.insert));
+        assert_eq!(b.target_cursor(), b.text.find("\\caption{").unwrap() + "\\caption{".len());
         // commands used in the document are offered too
         let c = comp("\\mymacro{x} and \\mym").unwrap();
         assert!(c.items.iter().any(|i| i.label == "\\mymacro"));

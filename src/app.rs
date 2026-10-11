@@ -708,10 +708,18 @@ impl App {
     }
 
     pub fn insert_snippet(&mut self, t: Tab, snippet: &str) -> Option<String> {
+        let vim = self.settings.input_vim;
         let b = self.active_buffer_mut(t)?;
         b.insert_snippet(snippet);
         b.last_edit = 0.0;
-        Some(b.rel.clone())
+        // e.g. \includegraphics{|} → offer the image files right away
+        b.want_completion = true;
+        let rel = b.rel.clone();
+        // in Vim mode continue typing right away
+        if vim {
+            self.vim.mode = crate::vim::Mode::Insert;
+        }
+        Some(rel)
     }
 
     pub fn save_all(&mut self) -> bool {
@@ -1239,6 +1247,65 @@ impl eframe::App for App {
                                 raw.events.push(key(egui::Key::L));
                             }
                             9 => eprintln!("KEYS show_pdf after Ctrl+L = {}", self.settings.show_pdf),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("snip") && self.debug_typed < 11030 {
+                        // toolbar insert: cursor mid-line, insert a snippet, then type
+                        if self.debug_typed < 11000 {
+                            self.debug_typed = 11000;
+                            self.settings.input_vim = true;
+                        }
+                        let k = self.debug_typed - 11000;
+                        let which = name.split("snip=").nth(1).and_then(|s| s.split(['-', '@']).next()).unwrap_or("sec").to_string();
+                        let rel = self.thesis.active.clone().unwrap_or_default();
+                        match k {
+                            1 => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &mut self.buffers[i];
+                                    let p = b.text.find("Since the Bavarian").map(|p| b.text[..p].chars().count()).unwrap_or(10);
+                                    b.select(p, p);
+                                }
+                            }
+                            6 => {
+                                let snip = match which.as_str() {
+                                    "img" => crate::workspace::snippet_for("Abbildung"),
+                                    "bold" => crate::workspace::snippet_for("Fett (Strg+B)"),
+                                    "list" => crate::workspace::snippet_for("Aufzählung"),
+                                    _ => crate::workspace::snippet_for("Abschnitt"),
+                                };
+                                self.insert_snippet(Tab::Thesis, snip);
+                            }
+                            7..=11 if which == "img" => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &self.buffers[i];
+                                    eprintln!("SNIPF k={k} want={} focus={} comp={:?} cursor={} vim={:?}", b.want_completion, ctx.memory(|m| m.has_focus(b.id)), b.completion.as_ref().map(|c| c.start), b.cursor, self.vim.mode);
+                                }
+                                if k == 10 {
+                                    if let Some(i) = self.buffer_idx(&rel) {
+                                        eprintln!("SNIP img popup after insert: {:?}", self.buffers[i].completion.as_ref().map(|c| c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>()));
+                                    }
+                                }
+                            }
+                            10000 if which == "img" => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    eprintln!("SNIP img popup after insert: {:?}", self.buffers[i].completion.as_ref().map(|c| c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>()));
+                                }
+                            }
+                            12 if which == "img" => raw.events.push(egui::Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }),
+                            13 if which == "img" => raw.events.push(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }),
+                            14 if which == "img" => raw.events.push(egui::Event::Text("NEU".into())),
+                            12 => raw.events.push(egui::Event::Text("NEU".into())),
+                            16 => {
+                                if let Some(i) = self.buffer_idx(&rel) {
+                                    let b = &self.buffers[i];
+                                    let p = b.text.find("NEU").unwrap_or(0);
+                                    let a = b.text[..p].rfind('\n').map(|x| b.text[..x].rfind('\n').unwrap_or(0)).unwrap_or(0);
+                                    let e = (p + 60).min(b.text.len());
+                                    eprintln!("SNIP {which} completion={:?}\n---\n{}\n---", b.completion.as_ref().map(|c| c.items.iter().take(3).map(|i| i.label.clone()).collect::<Vec<_>>()), &b.text[a..e]);
+                                }
+                            }
                             _ => {}
                         }
                         self.debug_typed += 1;
@@ -1995,7 +2062,7 @@ impl App {
         if name.contains("visual") {
             self.settings.visual = true;
         }
-        if !name.contains("comp") {
+        if !name.contains("comp") && !name.contains("snip") {
             if let Some(b) = self.active_buffer_mut(Tab::Thesis) {
                 b.completion = None;
             }
