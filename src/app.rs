@@ -237,6 +237,7 @@ pub struct App {
     pub vim: crate::vim::VimState,
     pub about_open: bool,
     pub help_open: bool,
+    keylog_focused: bool,
     pub settings_open: bool,
     pub settings_page: crate::settings_ui::Page,
     pub slide_ed: crate::slide_ui::SlideEditor,
@@ -319,6 +320,7 @@ impl App {
             vim: Default::default(),
             about_open: false,
             help_open: false,
+            keylog_focused: false,
             settings_open: false,
             settings_page: Default::default(),
             slide_ed: Default::default(),
@@ -1196,6 +1198,22 @@ impl eframe::App for App {
     /// egui drops keyboard focus on a plain Esc before any widget sees it. In vim mode we
     /// tag that Esc (harmless modifier) so the editor keeps focus and gets Normal mode.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if std::env::var_os("NEDIT_KEYLOG").is_some() {
+            if std::env::var_os("NEDIT_KEYLOG_FOCUS").is_some() && !self.keylog_focused {
+                if let Some(i) = self.thesis.active.clone().and_then(|a| self.buffer_idx(&a)) {
+                    self.buffers[i].request_focus = true;
+                    self.keylog_focused = true;
+                }
+            }
+            for e in &raw.events {
+                match e {
+                    egui::Event::ModifiersChanged(m) => eprintln!("KEYLOG t={:.3} ModifiersChanged shift={} ctrl={}", raw.time.unwrap_or(0.0), m.shift, m.ctrl),
+                    egui::Event::Key { key, pressed, modifiers, .. } => eprintln!("KEYLOG t={:.3} Key {key:?} pressed={pressed} shift={}", raw.time.unwrap_or(0.0), modifiers.shift),
+                    egui::Event::Text(t) => eprintln!("KEYLOG Text {t:?}"),
+                    _ => {}
+                }
+            }
+        }
         // screenshot runs: a step named "...rawesc..." sends a real, unmodified Esc once
         if let Ok(spec) = std::env::var("NEDIT_SHOT") {
             if let Some((_, steps)) = spec.split_once(':') {
@@ -1294,6 +1312,37 @@ impl eframe::App for App {
                                     eprintln!("SLTYPE\n{}", &t[a..(a + 420).min(t.len())]);
                                 }
                             }
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("qtoggle") && self.debug_typed < 10040 {
+                        if self.debug_typed < 10000 {
+                            self.debug_typed = 10000;
+                        }
+                        let k = self.debug_typed - 10000;
+                        let shift = egui::Modifiers { shift: true, ..Default::default() };
+                        let ctrl_p = egui::Event::Key { key: egui::Key::P, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+                        match k {
+                            // two taps, press and release in separate frames
+                            0 | 4 => raw.events.push(egui::Event::ModifiersChanged(shift)),
+                            2 | 6 => raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE)),
+                            9 => eprintln!("QT after 2x shift: open={}", self.quick.is_some()),
+                            10 | 14 => raw.events.push(ctrl_p.clone()),
+                            12 => eprintln!("QT after Ctrl+P: open={}", self.quick.is_some()),
+                            16 => eprintln!("QT after 2nd Ctrl+P: open={}", self.quick.is_some()),
+                            // two taps, each press+release within one frame
+                            18 | 21 => {
+                                raw.events.push(egui::Event::ModifiersChanged(shift));
+                                raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+                            }
+                            24 => eprintln!("QT after 2x shift (same-frame taps): open={}", self.quick.is_some()),
+                            // Shift as part of typing (Shift+A) must not count
+                            26 => raw.events.push(egui::Event::ModifiersChanged(shift)),
+                            27 => raw.events.push(egui::Event::Text("A".into())),
+                            28 | 30 => raw.events.push(egui::Event::ModifiersChanged(if k == 28 { egui::Modifiers::NONE } else { shift })),
+                            31 => raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE)),
+                            34 => eprintln!("QT after Shift+A then shift tap: open={} (expected false)", self.quick.is_some()),
                             _ => {}
                         }
                         self.debug_typed += 1;

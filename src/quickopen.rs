@@ -17,11 +17,16 @@ pub struct QuickOpen {
 }
 
 /// Double-Shift detection state.
-#[derive(Default)]
 pub struct ShiftTap {
     prev_down: bool,
     last_tap: f64,
     down_since: f64,
+}
+
+impl Default for ShiftTap {
+    fn default() -> Self {
+        Self { prev_down: false, last_tap: -10.0, down_since: -10.0 }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -136,55 +141,81 @@ impl App {
         self.quick = Some(QuickOpen { opened_at: now, focus: true, ..Default::default() });
     }
 
-    /// Detect two short Shift taps (no other key in between) and Ctrl+P.
-    ///
-    /// A quick tap often arrives as press *and* release within one frame, so the modifier
-    /// events are replayed in order instead of looking only at the final state.
-    pub fn quick_shortcut(&mut self, ctx: &egui::Context, now: f64) {
-        let ctrl_p = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P));
-        if ctrl_p {
+    /// Close the quick bar and give the keyboard back to the editor.
+    pub fn close_quick(&mut self) {
+        self.quick = None;
+        let doc = if self.tab == Tab::Shelf { self.last_doc_tab } else { self.tab };
+        if let Some(b) = self.active_buffer_mut(doc) {
+            b.request_focus = true;
+        }
+    }
+
+    fn toggle_quick(&mut self, now: f64) {
+        if self.quick.is_some() {
+            self.close_quick();
+        } else {
             self.open_quick(now);
+        }
+    }
+
+    /// Ctrl+P and two short Shift taps toggle the quick bar.
+    ///
+    /// Shift is tracked from the modifier events (replayed in order – a quick tap often
+    /// arrives as press *and* release in one frame) and, as a fallback, from the modifier
+    /// state of each frame, in case an input method swallows single events.
+    pub fn quick_shortcut(&mut self, ctx: &egui::Context, now: f64) {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P)) {
+            self.toggle_quick(now);
+            self.shift_tap = ShiftTap::default();
             return;
         }
-        let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
-        let mut open = false;
-        let st = &mut self.shift_tap;
-        for e in events {
+        let (events, state) = ctx.input(|i| (i.events.clone(), i.modifiers));
+        let mut transitions: Vec<Modifiers> = vec![];
+        let mut cancel = false;
+        for e in &events {
             match e {
-                egui::Event::ModifiersChanged(m) => {
-                    let only_shift = m.shift && !m.ctrl && !m.alt && !m.command && !m.mac_cmd;
-                    if only_shift && !st.prev_down {
-                        st.down_since = now;
-                    }
-                    if !m.shift && st.prev_down && st.down_since >= 0.0 {
-                        // released: a short press counts as a tap
-                        if now - st.down_since < 0.4 {
-                            if now - st.last_tap < 0.5 {
-                                st.last_tap = -10.0;
-                                open = true;
-                            } else {
-                                st.last_tap = now;
-                            }
-                        } else {
-                            st.last_tap = -10.0;
-                        }
-                    }
-                    if !only_shift && m.any() && m.shift {
-                        // Shift held together with another modifier: not a tap
-                        st.down_since = -10.0;
-                    }
-                    st.prev_down = m.shift;
-                }
+                egui::Event::ModifiersChanged(m) => transitions.push(*m),
                 // any real key, text or click between the taps cancels the gesture
-                egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. } | egui::Event::Paste(_) => {
-                    st.last_tap = -10.0;
-                    st.down_since = -10.0;
-                }
+                egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::PointerButton { pressed: true, .. } | egui::Event::Paste(_) => cancel = true,
                 _ => {}
             }
         }
-        if open && self.quick.is_none() {
-            self.open_quick(now);
+        if transitions.is_empty() && state.shift != self.shift_tap.prev_down {
+            transitions.push(state);
+        }
+        let log = std::env::var_os("NEDIT_KEYLOG").is_some();
+        let mut toggle = false;
+        let st = &mut self.shift_tap;
+        if cancel {
+            st.last_tap = -10.0;
+            st.down_since = -10.0;
+        }
+        for m in transitions {
+            let only_shift = m.shift && !m.ctrl && !m.alt && !m.command && !m.mac_cmd;
+            if m.shift && !st.prev_down {
+                // press: counts only without other modifiers
+                st.down_since = if only_shift { now } else { -10.0 };
+            } else if !m.shift && st.prev_down {
+                // release: a short press is a tap; two taps close together toggle the bar
+                let short = st.down_since >= 0.0 && now - st.down_since < 0.5;
+                if short && now - st.last_tap < 0.7 {
+                    st.last_tap = -10.0;
+                    toggle = true;
+                } else if short {
+                    st.last_tap = now;
+                } else {
+                    st.last_tap = -10.0;
+                }
+            } else if m.shift && !only_shift {
+                st.down_since = -10.0;
+            }
+            st.prev_down = m.shift;
+        }
+        if log && (toggle || !events.is_empty() && events.iter().any(|e| matches!(e, egui::Event::ModifiersChanged(_)))) {
+            eprintln!("QS now={now:.3} shift={} last_tap={:.3} toggle={toggle}", st.prev_down, st.last_tap);
+        }
+        if toggle {
+            self.toggle_quick(now);
         }
     }
 
@@ -585,6 +616,9 @@ impl App {
                 );
                 ui.painter().text(pos2(fr.min.x + 18.0, fr.center().y), Align2::LEFT_CENTER, hint, widgets::ui_font(11.0), pal.dim);
             });
+        if std::env::var_os("NEDIT_KEYLOG").is_some() && (modal.should_close() || close) {
+            eprintln!("QS quick closing: esc={esc} enter={enter} backdrop/esc={}", modal.should_close());
+        }
         if modal.should_close() {
             close = true;
         }
@@ -595,11 +629,7 @@ impl App {
             self.quick_run(a, ctx, now);
         }
         if close {
-            // give the keyboard back to the editor
-            let doc = if self.tab == Tab::Shelf { self.last_doc_tab } else { self.tab };
-            if let Some(b) = self.active_buffer_mut(doc) {
-                b.request_focus = true;
-            }
+            self.close_quick();
         } else {
             self.quick = Some(qo);
         }
