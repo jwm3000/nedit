@@ -86,7 +86,10 @@ fn sections() -> Vec<Section> {
             rows: vec![
                 ("F5", tr!("Präsentieren (Vollbild mit Timer)" | "Present (full screen with timer)")),
                 (tr!("Visuell" | "Visual"), tr!("Folien direkt bearbeiten wie in PowerPoint – sauberes LaTeX entsteht automatisch" | "Edit slides directly like in PowerPoint – clean LaTeX is generated")),
-                ("↵  Tab  ⇧Tab", tr!("Visuell: neuer Punkt, einrücken, ausrücken" | "Visual: new item, indent, outdent")),
+                ("↵  Tab  ⇧Tab", tr!("Visuell: neuer Absatz/Punkt, einrücken, ausrücken" | "Visual: new paragraph/item, indent, outdent")),
+                ("Esc  Entf  Ctrl+D", tr!("Visuell: Element auswählen, löschen, duplizieren" | "Visual: select, delete, duplicate element")),
+                ("Alt+↑↓  Ctrl+C/V", tr!("Visuell: Element verschieben, kopieren/einfügen" | "Visual: move, copy/paste element")),
+                ("Ctrl+M  Ctrl+Z", tr!("Visuell: neue Folie, rückgängig" | "Visual: new slide, undo")),
                 ("← →  Space", tr!("Folie zurück / weiter" | "Previous / next slide")),
                 ("B  P  T  Esc", tr!("Schwarz, Pause, Leiste fixieren, beenden" | "Black, pause, pin bar, exit")),
             ],

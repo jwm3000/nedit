@@ -87,7 +87,13 @@ pub fn slides_ui(app: &mut App, ui: &mut Ui, now: f64) {
         .default_size(230.0)
         .size_range(170.0..=360.0)
         .frame(Frame::new().fill(pal.mantle).inner_margin(Margin { left: 10, right: 10, top: 12, bottom: 8 }))
-        .show(ui, |ui| filmstrip(app, ui, &pal, now));
+        .show(ui, |ui| {
+            if app.settings.slides_visual {
+                app.slide_navigator(ui, now);
+            } else {
+                filmstrip(app, ui, &pal, now);
+            }
+        });
     let w = ui.available_width();
     let sw = (w * app.settings.stage_frac).clamp(300.0, (w - 340.0).max(300.0));
     let panel = app.settings.show_stage.then(|| {

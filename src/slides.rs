@@ -59,10 +59,30 @@ pub enum Elem {
         cols: Vec<Vec<Elem>>,
     },
     Math(String),
+    Table {
+        /// preceded by \centering
+        center: bool,
+        /// column spec as written, e.g. `lrr`
+        spec: String,
+        rows: Vec<Vec<String>>,
+        /// first row is a header (rule after it)
+        header: bool,
+        rules: Rules,
+    },
     Pause,
     TitlePage,
     Toc,
     Raw(String),
+}
+
+/// Horizontal lines of a table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rules {
+    /// \toprule / \midrule / \bottomrule (booktabs)
+    Booktabs,
+    /// \hline
+    Hline,
+    None,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +100,9 @@ pub struct FrameRange {
     pub end: usize,
     /// Section the frame belongs to (last `\section` before it).
     pub section: String,
+    /// A `\section{…}` directly before this frame (no other frame in between):
+    /// (start of the command, end of its line, title start, title end) as byte offsets.
+    pub section_here: Option<(usize, usize, usize, usize)>,
     pub slide: Slide,
 }
 
@@ -102,6 +125,8 @@ pub struct Deck {
     pub tug: bool,
     /// Where `\end{document}` starts (new slides go before it).
     pub doc_end: usize,
+    /// booktabs is loaded (new tables use \toprule …)
+    pub booktabs: bool,
 }
 
 // ───────────────────────────── scanning helpers ─────────────────────────────
@@ -324,6 +349,18 @@ pub fn parse_body(s: &str) -> Vec<Elem> {
                     i = line_end;
                     continue;
                 }
+                "\\centering" if par.trim().is_empty() && s[skip_ws(s, line_end)..].starts_with("\\begin{tabular}") => {
+                    // \centering + tabular → centered table
+                    let next = skip_ws(s, line_end);
+                    let head = next + "\\begin{tabular}".len();
+                    if let Some((e0, e1)) = env_end(s, head, "tabular") {
+                        if let Some(Elem::Table { spec, rows, header, rules, .. }) = parse_env("tabular", s, head, e0) {
+                            simple(Elem::Table { center: true, spec, rows, header, rules }, &mut par, &mut out);
+                            i = e1;
+                            continue;
+                        }
+                    }
+                }
                 "\\centering" if par.trim().is_empty() => {
                     // a lone \centering before an image belongs to the image
                     let next = skip_ws(s, line_end);
@@ -465,7 +502,29 @@ fn parse_env(env: &str, s: &str, head_end: usize, body_end: usize) -> Option<Ele
         }
         "center" => {
             let body = s[head_end..body_end].trim();
+            if let Some(rest) = body.strip_prefix("\\begin{tabular}") {
+                let off = s[head_end..].find("\\begin{tabular}")? + head_end + "\\begin{tabular}".len();
+                let (e0, e1) = env_end(s, off, "tabular")?;
+                if !s[e1..body_end].trim().is_empty() {
+                    return None;
+                }
+                let _ = rest;
+                return match parse_env("tabular", s, off, e0)? {
+                    Elem::Table { spec, rows, header, rules, .. } => Some(Elem::Table { center: true, spec, rows, header, rules }),
+                    _ => None,
+                };
+            }
             image_from(body)
+        }
+        "tabular" => {
+            let j = skip_sp(s, head_end);
+            if !s[j..].starts_with('{') {
+                return None;
+            }
+            let e = group_end(s, j)?;
+            let spec = s[j + 1..e - 1].to_string();
+            let (rows, header, rules) = parse_table(&s[e..body_end])?;
+            Some(Elem::Table { center: false, spec, rows, header, rules })
         }
         "equation*" | "displaymath" => Some(Elem::Math(dedent(&s[head_end..body_end]).trim().to_string())),
         "multicols" => {
@@ -478,6 +537,59 @@ fn parse_env(env: &str, s: &str, head_end: usize, body_end: usize) -> Option<Ele
     }
 }
 
+/// Rows of a simple tabular body; None for anything fancy (multicolumn, nested envs …).
+fn parse_table(body: &str) -> Option<(Vec<Vec<String>>, bool, Rules)> {
+    if ["\\multicolumn", "\\multirow", "\\cline", "\\begin{", "\\cmidrule"].iter().any(|x| body.contains(x)) {
+        return None;
+    }
+    if body.lines().any(|l| l.trim_start().starts_with('%')) {
+        return None;
+    }
+    let rules = if body.contains("\\toprule") || body.contains("\\midrule") {
+        Rules::Booktabs
+    } else if body.contains("\\hline") {
+        Rules::Hline
+    } else {
+        Rules::None
+    };
+    let mut rows: Vec<Vec<String>> = vec![];
+    let mut header = false;
+    for seg in body.split("\\\\") {
+        let has_mid = seg.contains("\\midrule") || (rules == Rules::Hline && rows.len() == 1 && seg.contains("\\hline"));
+        if has_mid && rows.len() == 1 {
+            header = true;
+        }
+        let clean = seg.replace("\\toprule", "").replace("\\midrule", "").replace("\\bottomrule", "").replace("\\hline", "");
+        let clean = clean.trim();
+        if clean.is_empty() {
+            continue;
+        }
+        // split on unescaped &
+        let mut cells = vec![];
+        let mut cur = String::new();
+        let mut prev = ' ';
+        for ch in clean.chars() {
+            if ch == '&' && prev != '\\' {
+                cells.push(cur.trim().to_string());
+                cur.clear();
+            } else {
+                cur.push(ch);
+            }
+            prev = ch;
+        }
+        cells.push(cur.trim().to_string());
+        rows.push(cells.into_iter().map(|c| c.split_whitespace().collect::<Vec<_>>().join(" ")).collect());
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let n = rows.iter().map(Vec::len).max().unwrap_or(1);
+    for r in &mut rows {
+        r.resize(n, String::new());
+    }
+    Some((rows, header, rules))
+}
+
 static RE_FRAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\begin\{frame\}").unwrap());
 static RE_SECTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\section\*?(?:\[[^\]]*\])?\{([^{}]*)\}").unwrap());
 
@@ -486,6 +598,7 @@ pub fn parse_deck(src: &str) -> Deck {
     let mut deck = Deck { doc_end: src.rfind("\\end{document}").unwrap_or(src.len()), ..Default::default() };
     deck.wide = Regex::new(r"(?m)^[^%\n]*\\documentclass\[[^\]]*aspectratio=169").unwrap().is_match(src);
     deck.tug = src.contains("tugraz2018") || src.contains("tugitemize");
+    deck.booktabs = src.contains("{booktabs}");
     // title metadata in the preamble
     let pre_end = src.find("\\begin{document}").unwrap_or(0);
     for cmd in ["title", "subtitle", "author", "institute", "date"] {
@@ -509,8 +622,14 @@ pub fn parse_deck(src: &str) -> Deck {
         if src[ls..start].contains('%') {
             continue;
         }
+        let mut section_here = None;
         for sm in RE_SECTION.captures_iter(&src[last..start]) {
             section = sm[1].to_string();
+            let whole = sm.get(0).unwrap();
+            let t = sm.get(1).unwrap();
+            let (a, b) = (last + whole.start(), last + whole.end());
+            let line_end = src[b..].find('\n').map_or(src.len(), |p| b + p + 1);
+            section_here = Some((a, line_end, last + t.start(), last + t.end()));
         }
         let Some((e0, e1)) = env_end(src, m.end(), "frame") else { break };
         let mut j = m.end();
@@ -538,7 +657,7 @@ pub fn parse_deck(src: &str) -> Deck {
                 body = &body[e..];
             }
         }
-        deck.frames.push(FrameRange { start, end: e1, section: section.clone(), slide: Slide { opts, title, body: parse_body(&dedent(body)) } });
+        deck.frames.push(FrameRange { start, end: e1, section: section.clone(), section_here, slide: Slide { opts, title, body: parse_body(&dedent(body)) } });
         last = e1;
     }
     deck
@@ -617,6 +736,32 @@ fn write_elems(out: &mut String, elems: &[Elem], ind: &str) {
                 }
                 out.push_str(&format!("{ind}\\end{{{env}}}\n"));
             }
+            Elem::Table { center, spec, rows, header, rules } => {
+                if *center {
+                    out.push_str(&format!("{ind}\\centering\n"));
+                }
+                out.push_str(&format!("{ind}\\begin{{tabular}}{{{spec}}}\n"));
+                let (top, mid, bot) = match rules {
+                    Rules::Booktabs => (Some("\\toprule"), Some("\\midrule"), Some("\\bottomrule")),
+                    Rules::Hline => (Some("\\hline"), Some("\\hline"), Some("\\hline")),
+                    Rules::None => (None, None, None),
+                };
+                if let Some(t) = top {
+                    out.push_str(&format!("{ind}  {t}\n"));
+                }
+                for (i, r) in rows.iter().enumerate() {
+                    out.push_str(&format!("{ind}  {} \\\\\n", r.iter().map(|c| c.trim()).collect::<Vec<_>>().join(" & ")));
+                    if i == 0 && *header && rows.len() > 1 {
+                        if let Some(m) = mid {
+                            out.push_str(&format!("{ind}  {m}\n"));
+                        }
+                    }
+                }
+                if let Some(b) = bot {
+                    out.push_str(&format!("{ind}  {b}\n"));
+                }
+                out.push_str(&format!("{ind}\\end{{tabular}}\n"));
+            }
             Elem::Raw(r) => {
                 for l in r.lines() {
                     if l.trim().is_empty() {
@@ -663,6 +808,297 @@ pub fn escape_typed(ch: char, before: Option<char>) -> Option<&'static str> {
         '_' => "\\_",
         _ => return None,
     })
+}
+
+
+// ───────────────────────────── editing operations ─────────────────────────────
+//
+// Element paths: `[i]` = top-level element i; `[i, j]` = element j in the body of block i;
+// `[i, c, j]` = element j in column c of columns element i.
+
+/// The element at `path`.
+pub fn elem_mut<'a>(body: &'a mut Vec<Elem>, path: &[usize]) -> Option<&'a mut Elem> {
+    let (list, i) = parent_mut(body, path)?;
+    list.get_mut(i)
+}
+
+pub fn elem_ref<'a>(body: &'a [Elem], path: &[usize]) -> Option<&'a Elem> {
+    match path {
+        [] => None,
+        [i] => body.get(*i),
+        [i, rest @ ..] => match body.get(*i)? {
+            Elem::Block { body, .. } => elem_ref(body, rest),
+            Elem::Columns { cols, .. } => {
+                let (c, rest2) = rest.split_first()?;
+                elem_ref(cols.get(*c)?, rest2)
+            }
+            _ => None,
+        },
+    }
+}
+
+/// The list containing `path` and the index in it.
+pub fn parent_mut<'a>(body: &'a mut Vec<Elem>, path: &[usize]) -> Option<(&'a mut Vec<Elem>, usize)> {
+    match path {
+        [] => None,
+        [i] => Some((body, *i)),
+        [i, rest @ ..] => match body.get_mut(*i)? {
+            Elem::Block { body, .. } => parent_mut(body, rest),
+            Elem::Columns { cols, .. } => {
+                let (c, rest2) = rest.split_first()?;
+                parent_mut(cols.get_mut(*c)?, rest2)
+            }
+            _ => None,
+        },
+    }
+}
+
+fn with_last(path: &[usize], i: usize) -> Vec<usize> {
+    let mut p = path.to_vec();
+    if let Some(l) = p.last_mut() {
+        *l = i;
+    }
+    p
+}
+
+/// Insert after the element at `after` (same container), or at the end of the slide.
+pub fn insert_after(body: &mut Vec<Elem>, after: Option<&[usize]>, e: Elem) -> Vec<usize> {
+    if let Some(p) = after {
+        if let Some((list, i)) = parent_mut(body, p) {
+            let at = (i + 1).min(list.len());
+            list.insert(at, e);
+            return with_last(p, at);
+        }
+    }
+    body.push(e);
+    vec![body.len() - 1]
+}
+
+/// Insert before the element at `path` (same container).
+pub fn insert_before(body: &mut Vec<Elem>, path: &[usize], e: Elem) -> Vec<usize> {
+    if let Some((list, i)) = parent_mut(body, path) {
+        let at = i.min(list.len());
+        list.insert(at, e);
+        return with_last(path, at);
+    }
+    body.push(e);
+    vec![body.len() - 1]
+}
+
+/// Remove an element; returns the path of a neighbour to select (if any).
+pub fn delete(body: &mut Vec<Elem>, path: &[usize]) -> Option<Vec<usize>> {
+    let (list, i) = parent_mut(body, path)?;
+    if i >= list.len() {
+        return None;
+    }
+    list.remove(i);
+    if list.is_empty() {
+        // keep blocks/columns editable: an empty container gets an empty paragraph
+        if path.len() > 1 {
+            list.push(Elem::Text(String::new()));
+            return Some(with_last(path, 0));
+        }
+        return None;
+    }
+    // the element that moved into the gap, or the new last one
+    Some(with_last(path, i.min(list.len() - 1)))
+}
+
+pub fn duplicate(body: &mut Vec<Elem>, path: &[usize]) -> Option<Vec<usize>> {
+    let e = elem_ref(body, path)?.clone();
+    Some(insert_after(body, Some(path), e))
+}
+
+/// Move up (-1) or down (+1) within the container; returns the new path.
+pub fn move_by(body: &mut Vec<Elem>, path: &[usize], delta: i32) -> Option<Vec<usize>> {
+    let (list, i) = parent_mut(body, path)?;
+    let j = i as i32 + delta;
+    if j < 0 || j as usize >= list.len() {
+        return None;
+    }
+    list.swap(i, j as usize);
+    Some(with_last(path, j as usize))
+}
+
+fn split_chars(s: &str, at: usize) -> (String, String) {
+    let c: Vec<char> = s.chars().collect();
+    let at = at.min(c.len());
+    (c[..at].iter().collect(), c[at..].iter().collect())
+}
+
+/// Enter in a paragraph: split it at `at`; returns the path of the new paragraph.
+pub fn split_text(body: &mut Vec<Elem>, path: &[usize], at: usize) -> Option<Vec<usize>> {
+    let Some(Elem::Text(t)) = elem_mut(body, path) else { return None };
+    let (head, tail) = split_chars(t, at);
+    // keep \centering / size of the paragraph for the new one
+    let (center, size, _) = text_style(&head);
+    *t = head.trim_end().to_string();
+    let tail = set_text_style(tail.trim_start(), center, size);
+    Some(insert_after(body, Some(path), Elem::Text(tail)))
+}
+
+/// Backspace at the start of a paragraph: merge into the previous paragraph.
+/// Returns the previous path and the caret position there.
+pub fn merge_text_prev(body: &mut Vec<Elem>, path: &[usize]) -> Option<(Vec<usize>, usize)> {
+    let i = *path.last()?;
+    if i == 0 {
+        return None;
+    }
+    let prev = with_last(path, i - 1);
+    let Some(Elem::Text(cur)) = elem_ref(body, path).cloned() else { return None };
+    let Some(Elem::Text(p)) = elem_mut(body, &prev) else { return None };
+    let caret = p.chars().count();
+    let (_, _, rest) = text_style(&cur);
+    let rest = rest.to_string();
+    if !p.is_empty() && !rest.is_empty() && !p.ends_with(' ') {
+        p.push(' ');
+    }
+    let caret = if p.chars().count() > caret { caret + 1 } else { caret };
+    p.push_str(&rest);
+    let (list, idx) = parent_mut(body, path)?;
+    list.remove(idx);
+    Some((prev, caret))
+}
+
+/// What happens after Enter/Backspace in a list item.
+#[derive(Debug, PartialEq)]
+pub enum ListResult {
+    /// focus item `idx` at char `caret`
+    Item(usize, usize),
+    /// the list ended: a paragraph was added after it (path of the paragraph)
+    Exit(Vec<usize>),
+    /// the list was removed completely; select this path (if any)
+    Removed(Option<Vec<usize>>),
+}
+
+/// Enter in item `idx` at `at`: empty item → outdent / leave the list; otherwise split.
+pub fn list_enter(body: &mut Vec<Elem>, path: &[usize], idx: usize, at: usize) -> Option<ListResult> {
+    let Some(Elem::List { items, .. }) = elem_mut(body, path) else { return None };
+    let it = items.get(idx)?.clone();
+    if it.text.trim().is_empty() {
+        if it.level > 0 {
+            items[idx].level -= 1;
+            return Some(ListResult::Item(idx, 0));
+        }
+        items.remove(idx);
+        let tail: Vec<Item> = items.drain(idx..).collect();
+        let empty = items.is_empty();
+        // leave the list: new paragraph after it (items after the cursor form a new list)
+        let list_clone = elem_ref(body, path).cloned();
+        let par_path = insert_after(body, Some(path), Elem::Text(String::new()));
+        if !tail.is_empty() {
+            if let Some(Elem::List { env, numbered, step, .. }) = list_clone {
+                insert_after(body, Some(&par_path), Elem::List { env, numbered, step, items: tail });
+            }
+        }
+        if empty {
+            delete(body, path);
+            return Some(ListResult::Exit(path.to_vec()));
+        }
+        return Some(ListResult::Exit(par_path));
+    }
+    let (head, tail) = split_chars(&it.text, at);
+    items[idx].text = head.trim_end().to_string();
+    items.insert(idx + 1, Item { level: it.level, overlay: String::new(), text: tail.trim_start().to_string() });
+    Some(ListResult::Item(idx + 1, 0))
+}
+
+/// Backspace at the start of item `idx`: outdent, merge with the previous item, or remove.
+pub fn list_backspace(body: &mut Vec<Elem>, path: &[usize], idx: usize) -> Option<ListResult> {
+    let Some(Elem::List { items, .. }) = elem_mut(body, path) else { return None };
+    if items.get(idx)?.level > 0 {
+        items[idx].level -= 1;
+        return Some(ListResult::Item(idx, 0));
+    }
+    if idx > 0 {
+        let cur = items.remove(idx);
+        let prev = &mut items[idx - 1];
+        let caret = prev.text.chars().count();
+        if !prev.text.is_empty() && !cur.text.is_empty() {
+            prev.text.push(' ');
+        }
+        let caret = if prev.text.chars().count() > caret { caret + 1 } else { caret };
+        prev.text.push_str(&cur.text);
+        return Some(ListResult::Item(idx - 1, caret));
+    }
+    if items.len() == 1 && items[0].text.is_empty() {
+        let sel = delete(body, path);
+        return Some(ListResult::Removed(sel));
+    }
+    None
+}
+
+/// Indent (+1) / outdent (-1) an item; a nested item can be at most one level deeper
+/// than the one before it.
+pub fn list_indent(body: &mut Vec<Elem>, path: &[usize], idx: usize, delta: i32) -> bool {
+    let Some(Elem::List { items, .. }) = elem_mut(body, path) else { return false };
+    let max = if idx == 0 { 0 } else { items[idx - 1].level as i32 + 1 };
+    let l = (items[idx].level as i32 + delta).clamp(0, max.min(3));
+    let changed = l != items[idx].level as i32;
+    items[idx].level = l as u8;
+    changed
+}
+
+const SIZES: [&str; 7] = ["\\footnotesize", "\\small", "", "\\large", "\\Large", "\\LARGE", "\\huge"];
+
+/// Paragraph style from leading commands: (centered, size step -2…4, rest of the text).
+pub fn text_style(t: &str) -> (bool, i32, &str) {
+    let mut rest = t.trim_start();
+    let mut center = false;
+    let mut size = 0;
+    loop {
+        if let Some(r) = rest.strip_prefix("\\centering") {
+            center = true;
+            rest = r.trim_start();
+            continue;
+        }
+        let mut hit = false;
+        for (i, cmd) in SIZES.iter().enumerate() {
+            if cmd.is_empty() {
+                continue;
+            }
+            if let Some(r) = rest.strip_prefix(cmd) {
+                if !r.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                    size = i as i32 - 2;
+                    rest = r.trim_start();
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if !hit {
+            break;
+        }
+    }
+    (center, size, rest)
+}
+
+pub fn set_text_style(t: &str, center: bool, size: i32) -> String {
+    let (_, _, rest) = text_style(t);
+    let mut out = String::new();
+    if center {
+        out.push_str("\\centering ");
+    }
+    let cmd = SIZES[(size.clamp(-2, 4) + 2) as usize];
+    if !cmd.is_empty() {
+        out.push_str(cmd);
+        out.push(' ');
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A new table (3×3 with header).
+pub fn new_table(booktabs: bool) -> Elem {
+    let h = |s: &str| s.to_string();
+    let (a, b, c) = if crate::i18n::en() { ("Column 1", "Column 2", "Column 3") } else { ("Spalte 1", "Spalte 2", "Spalte 3") };
+    Elem::Table {
+        center: true,
+        spec: "lll".into(),
+        rows: vec![vec![h(a), h(b), h(c)], vec![String::new(), String::new(), String::new()], vec![String::new(), String::new(), String::new()]],
+        header: true,
+        rules: if booktabs { Rules::Booktabs } else { Rules::Hline },
+    }
 }
 
 // ───────────────────────────── templates ─────────────────────────────
@@ -832,8 +1268,104 @@ mod tests {
                 eprintln!("{:<14} {:?}", f.slide.title, f.slide.body.iter().map(|e| match e {
                     Elem::Text(_) => "Text", Elem::List { .. } => "List", Elem::Block { .. } => "Block", Elem::Image { .. } => "Image",
                     Elem::Columns { .. } => "Columns", Elem::Math(_) => "Math", Elem::Pause => "Pause", Elem::TitlePage => "Title",
-                    Elem::Toc => "Toc", Elem::Raw(_) => "RAW" }).collect::<Vec<_>>());
+                    Elem::Toc => "Toc", Elem::Table { .. } => "Table", Elem::Raw(_) => "RAW" }).collect::<Vec<_>>());
             }
         }
+    }
+
+    fn body(src: &str) -> Vec<Elem> {
+        parse_body(src)
+    }
+
+    #[test]
+    fn table_round_trip() {
+        let src = "\\begin{document}\n\\begin{frame}{T}\n  \\centering\n  \\begin{tabular}{lrr}\n    \\toprule\n    A & B & C \\\\\n    \\midrule\n    1 & 2 & 3 \\\\\n    4 & 5 \\& x & 6 \\\\\n    \\bottomrule\n  \\end{tabular}\n\\end{frame}\n\\end{document}\n";
+        let d = parse_deck(src);
+        let Elem::Table { center, spec, rows, header, rules } = &d.frames[0].slide.body[0] else { panic!("{:?}", d.frames[0].slide.body) };
+        assert!(*center && *header && *rules == Rules::Booktabs);
+        assert_eq!(spec, "lrr");
+        assert_eq!(rows[2], vec!["4", "5 \\& x", "6"]);
+        let w = write_slide(&d.frames[0].slide);
+        let again = parse_deck(&format!("\\begin{{document}}\n{w}\n\\end{{document}}"));
+        assert_eq!(again.frames[0].slide, d.frames[0].slide, "{w}");
+        // hline tables keep their style
+        let b = body("\\begin{tabular}{|l|l|}\n\\hline\na & b \\\\\n\\hline\nc & d \\\\\n\\hline\n\\end{tabular}");
+        assert!(matches!(&b[0], Elem::Table { rules: Rules::Hline, header: true, center: false, .. }), "{b:?}");
+        // fancy tables stay raw
+        let b = body("\\begin{tabular}{ll}\n\\multicolumn{2}{c}{x} \\\\\n\\end{tabular}");
+        assert!(matches!(&b[0], Elem::Raw(_)));
+        let t = new_table(true);
+        let s = Slide { opts: String::new(), title: "T".into(), body: vec![t] };
+        let w = write_slide(&s);
+        assert_eq!(parse_deck(&format!("\\begin{{document}}\n{w}\n\\end{{document}}")).frames[0].slide, s);
+    }
+
+    #[test]
+    fn sections_on_frames() {
+        let src = "\\begin{document}\n\\begin{frame}\\maketitle\\end{frame}\n\n\\section{Intro}\n\n\\begin{frame}{A}\nx\n\\end{frame}\n\\begin{frame}{B}\ny\n\\end{frame}\n\\end{document}";
+        let d = parse_deck(src);
+        assert!(d.frames[0].section_here.is_none());
+        let (a, e, t0, t1) = d.frames[1].section_here.unwrap();
+        assert_eq!(&src[t0..t1], "Intro");
+        assert_eq!(&src[a..e], "\\section{Intro}\n");
+        assert_eq!(d.frames[2].section, "Intro");
+        assert!(d.frames[2].section_here.is_none());
+    }
+
+    #[test]
+    fn paragraph_ops() {
+        let mut b = vec![Elem::Text("Hallo Welt".into())];
+        let p = split_text(&mut b, &[0], 5).unwrap();
+        assert_eq!(p, vec![1]);
+        assert_eq!(b, vec![Elem::Text("Hallo".into()), Elem::Text("Welt".into())]);
+        let (prev, caret) = merge_text_prev(&mut b, &[1]).unwrap();
+        assert_eq!((prev, caret), (vec![0], 6));
+        assert_eq!(b, vec![Elem::Text("Hallo Welt".into())]);
+        // style survives a split
+        let mut b = vec![Elem::Text("\\centering \\Large Fragen? Danke".into())];
+        split_text(&mut b, &[0], "\\centering \\Large Fragen?".len()).unwrap();
+        assert_eq!(b[1], Elem::Text("\\centering \\Large Danke".into()));
+        assert_eq!(text_style("\\centering\\Large Hi"), (true, 2, "Hi"));
+        assert_eq!(set_text_style("\\Large Hi", false, 0), "Hi");
+        // move, duplicate, delete in a column
+        let mut b = vec![Elem::Columns { env: "columns".into(), cols: vec![vec![Elem::Text("a".into()), Elem::Text("b".into())], vec![]] }];
+        assert_eq!(move_by(&mut b, &[0, 0, 0], 1), Some(vec![0, 0, 1]));
+        assert_eq!(duplicate(&mut b, &[0, 0, 1]), Some(vec![0, 0, 2]));
+        assert_eq!(delete(&mut b, &[0, 0, 0]), Some(vec![0, 0, 0]));
+        let Elem::Columns { cols, .. } = &b[0] else { panic!() };
+        assert_eq!(cols[0], vec![Elem::Text("a".into()), Elem::Text("a".into())]);
+        // inserting into an empty slide
+        let mut e: Vec<Elem> = vec![];
+        assert_eq!(insert_after(&mut e, None, Elem::Pause), vec![0]);
+        assert_eq!(insert_after(&mut e, Some(&[7]), Elem::Toc), vec![1]);
+    }
+
+    #[test]
+    fn list_ops() {
+        let it = |l: u8, t: &str| Item { level: l, overlay: String::new(), text: t.into() };
+        let list = |items: Vec<Item>| Elem::List { env: "itemize".into(), numbered: false, step: false, items };
+        // split
+        let mut b = vec![list(vec![it(0, "eins zwei")])];
+        assert_eq!(list_enter(&mut b, &[0], 0, 4), Some(ListResult::Item(1, 0)));
+        assert_eq!(b[0], list(vec![it(0, "eins"), it(0, "zwei")]));
+        // empty nested item → outdent, empty top item → leave the list
+        let mut b = vec![list(vec![it(0, "a"), it(1, "")])];
+        assert_eq!(list_enter(&mut b, &[0], 1, 0), Some(ListResult::Item(1, 0)));
+        assert_eq!(list_enter(&mut b, &[0], 1, 0), Some(ListResult::Exit(vec![1])));
+        assert_eq!(b, vec![list(vec![it(0, "a")]), Elem::Text(String::new())]);
+        // leaving in the middle splits the list
+        let mut b = vec![list(vec![it(0, "a"), it(0, ""), it(0, "c")])];
+        assert_eq!(list_enter(&mut b, &[0], 1, 0), Some(ListResult::Exit(vec![1])));
+        assert_eq!(b, vec![list(vec![it(0, "a")]), Elem::Text(String::new()), list(vec![it(0, "c")])]);
+        // backspace: outdent, then merge
+        let mut b = vec![list(vec![it(0, "a"), it(1, "b")])];
+        assert_eq!(list_backspace(&mut b, &[0], 1), Some(ListResult::Item(1, 0)));
+        assert_eq!(list_backspace(&mut b, &[0], 1), Some(ListResult::Item(0, 2)));
+        assert_eq!(b[0], list(vec![it(0, "a b")]));
+        // indent limits
+        let mut b = vec![list(vec![it(0, "a"), it(0, "b")])];
+        assert!(!list_indent(&mut b, &[0], 0, 1));
+        assert!(list_indent(&mut b, &[0], 1, 1));
+        assert!(!list_indent(&mut b, &[0], 1, 1));
     }
 }

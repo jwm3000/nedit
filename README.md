@@ -128,10 +128,19 @@ Filmstreifen aller Folien, Editor mit Folien-Bausteinen (Folie, zwei Spalten, Bi
 schrittweise Aufzählung, Block, Formel …) und eine Bühne, die automatisch die Folie unter
 dem Cursor zeigt. Die Literatur kommt aus derselben Bibliothek wie die Arbeit.
 
-**Visueller Folien-Editor:** Mit „Visuell“ bearbeitest du die Folien direkt wie in PowerPoint –
-Titel, Aufzählungen (Enter = neuer Punkt, Tab = einrücken), Blöcke, Bilder, Spalten, Formeln
-und Pausen. nEdit schreibt dabei sauberes, eingerücktes LaTeX nur für die bearbeitete Folie;
-was der Editor nicht kennt (z. B. TikZ-Diagramme), bleibt unverändert als LaTeX-Baustein.
+**Visueller Folien-Editor:** Mit „Visuell“ bearbeitest du die Folien direkt wie in PowerPoint:
+- Folienliste links mit Mini-Vorschauen, Abschnitten, Drag & Drop und Rechtsklick-Menü
+- Elemente anklicken = auswählen (schwebende Leiste je Typ), Entf löschen, Strg+D duplizieren,
+  Alt+↑/↓ verschieben, Strg+C/V kopieren, Strg+Z/Strg+Umschalt+Z rückgängig/wiederholen
+- Text wie in einem Editor: Enter teilt Absätze und Punkte, Backspace verbindet, Tab rückt ein,
+  ↑/↓ springen zwischen Feldern; Fett, Kursiv, Hervorheben, Code und Zitate aus der Bibliothek
+- Elemente: Text (Ausrichtung, Größe), Aufzählungen (schrittweise aufdecken), Blöcke, Bilder,
+  Spalten, **Tabellen** (Tab/Enter navigiert, neue Zeilen automatisch), Formeln, Pausen
+- „+“ zwischen Elementen und eine Einfügeleiste unter der Folie; leere Folien zeigen große Auswahlkarten
+- Abschnitt direkt im Folienkopf umbenennen oder neu beginnen, Strg+M für eine neue Folie
+
+nEdit schreibt sauberes, eingerücktes LaTeX nur für die bearbeitete Folie; was der Editor nicht
+kennt (z. B. TikZ-Diagramme), bleibt unverändert als LaTeX-Baustein.
 
 <img src="docs/screenshots/praesentieren.png" alt="Präsentationsmodus">
 

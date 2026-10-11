@@ -1072,7 +1072,8 @@ impl App {
         let (f11, ctrl_e, esc, doc_key, diff_key) = ctx.input_mut(|i| {
             let doc = i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::D);
             // Ctrl+D (without Shift): git diff of the current file
-            let diff = !i.modifiers.shift && i.consume_key(Modifiers::COMMAND, Key::D);
+            // (in the presentation Ctrl+D duplicates slides / elements)
+            let diff = self.tab == Tab::Thesis && !i.modifiers.shift && i.consume_key(Modifiers::COMMAND, Key::D);
             (i.consume_key(Modifiers::NONE, Key::F11), i.consume_key(Modifiers::COMMAND, Key::E), i.key_pressed(Key::Escape), doc, diff)
         });
         if diff_key {
@@ -1274,6 +1275,81 @@ impl eframe::App for App {
                                 raw.events.push(key(egui::Key::L));
                             }
                             9 => eprintln!("KEYS show_pdf after Ctrl+L = {}", self.settings.show_pdf),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("svtwo") && self.debug_typed < 15060 {
+                        if self.debug_typed < 15000 {
+                            self.debug_typed = 15000;
+                            self.settings.slides_visual = true;
+                        }
+                        let k = self.debug_typed - 15000;
+                        let key = |key: egui::Key, m: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m };
+                        let rel = self.project.config.slides_main.clone();
+                        let text = self.buffer_idx(&rel).map(|i| self.buffers[i].text.clone()).unwrap_or_default();
+                        match k {
+                            // table on slide 6 ("Tasting"): last cell, Tab → new row, type
+                            3 => self.slide_ed.debug_focus = Some(crate::slide_ui::field_id(5, &[0], 100_000 + 4 * 256 + 3)),
+                            6 => raw.events.push(key(egui::Key::Tab, egui::Modifiers::NONE)),
+                            8 => raw.events.push(egui::Event::Text("28°C".into())),
+                            10 => raw.events.push(key(egui::Key::Tab, egui::Modifiers::NONE)),
+                            12 => raw.events.push(egui::Event::Text("9.0".into())),
+                            15 => {
+                                let a = text.find("{Tasting}").unwrap_or(0);
+                                let e = text[a..].find("\\end{frame}").map_or(text.len(), |p| a + p);
+                                eprintln!("SV2 table:\n{}", &text[a..e]);
+                            }
+                            // rename the section of this slide
+                            16 => self.slide_ed.debug_section("Results and Tasting"),
+                            18 => raw.events.push(key(egui::Key::Enter, egui::Modifiers::NONE)),
+                            21 => eprintln!("SV2 sections: {:?}", crate::slides::parse_deck(&text).frames.iter().filter(|f| f.section_here.is_some()).map(|f| f.section.clone()).collect::<Vec<_>>()),
+                            // new slide with Ctrl+M, type a title
+                            22 => raw.events.push(key(egui::Key::M, egui::Modifiers::COMMAND)),
+                            26 => raw.events.push(egui::Event::Text(" Zwei".into())),
+                            30 => eprintln!("SV2 titles: {:?}", crate::slides::parse_deck(&text).frames.iter().map(|f| f.slide.title.clone()).collect::<Vec<_>>()),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("svtest") && self.debug_typed < 13060 {
+                        if self.debug_typed < 13000 {
+                            self.debug_typed = 13000;
+                            self.settings.slides_visual = true;
+                        }
+                        let k = self.debug_typed - 13000;
+                        let key = |key: egui::Key, m: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m };
+                        let log = |app: &App, label: &str| {
+                            let rel = app.project.config.slides_main.clone();
+                            if let Some(i) = app.buffer_idx(&rel) {
+                                let t = &app.buffers[i].text;
+                                let a = t.find("{Why Beer?}").unwrap_or(0);
+                                let e = t[a..].find("\\end{frame}").map_or(t.len(), |p| a + p + 11);
+                                eprintln!("SV {label}:\n{}\n", &t[a..e]);
+                            }
+                        };
+                        if (17..30).contains(&k) {
+                            eprintln!("SVK k={k} focused={:?} {}", ctx.memory(|m| m.focused()), self.slide_ed.debug_state());
+                        }
+                        match k {
+                            3 => self.slide_ed.debug_focus = Some(crate::slide_ui::field_id(2, &[0], 1000)),
+                            6 => raw.events.push(key(egui::Key::Enter, egui::Modifiers::NONE)),
+                            8 => raw.events.push(egui::Event::Text("Neu".into())),
+                            10 => raw.events.push(key(egui::Key::Enter, egui::Modifiers::NONE)),
+                            12 => raw.events.push(key(egui::Key::Enter, egui::Modifiers::NONE)),
+                            14 => {
+                                for c in "Absatz 50%".chars() {
+                                    raw.events.push(egui::Event::Text(c.to_string()));
+                                }
+                            }
+                            17 => log(self, "after typing"),
+                            18 => raw.events.push(key(egui::Key::Escape, egui::Modifiers::NONE)),
+                            20 => raw.events.push(key(egui::Key::D, egui::Modifiers::COMMAND)),
+                            22 => log(self, "after Esc + Ctrl+D"),
+                            23 => raw.events.push(key(egui::Key::Delete, egui::Modifiers::NONE)),
+                            25 => log(self, "after Delete"),
+                            26 => raw.events.push(key(egui::Key::Z, egui::Modifiers::COMMAND)),
+                            28 => log(self, "after Ctrl+Z"),
                             _ => {}
                         }
                         self.debug_typed += 1;
@@ -2278,6 +2354,19 @@ impl App {
                     let c = b.text[..p].chars().count();
                     b.cursor = c;
                     b.sel_end = c;
+                }
+            }
+        }
+        if let Some(n) = name.split("slsel=").nth(1).and_then(|s| s.split(['-', '@']).next()).and_then(|s| s.parse::<usize>().ok()) {
+            self.slide_ed.debug_select(vec![n]);
+        }
+        if name.contains("addblank") && self.debug_typed != 14000 {
+            self.debug_typed = 14000;
+            let rel = self.project.config.slides_main.clone();
+            if let Some(i) = self.buffer_idx(&rel) {
+                let b = &mut self.buffers[i];
+                if let Some(p) = b.text.find("\\section{Motivation}") {
+                    b.text.insert_str(p, "\\begin{frame}{Leere Folie}\n\\end{frame}\n\n");
                 }
             }
         }
