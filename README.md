@@ -157,6 +157,7 @@ was der Editor nicht kennt (z. B. TikZ-Diagramme), bleibt unverändert als LaTeX
 
 <img src="docs/screenshots/themes.png" alt="Omarchy-Themes">
 
+Neu: **nEdit Light** – das helle Gegenstück zu nEdit Ink (warmes Papierweiß, Tinten-Anthrazit, Bernstein-Akzent).
 nEdit übernimmt automatisch das aktive [Omarchy](https://omarchy.org)-Theme und wechselt
 live mit. Auf **Windows, macOS** und anderen Linux-Systemen stehen **12 eingebaute Themes**
 zur Auswahl (Tokyo Night, Catppuccin, Catppuccin Latte, Gruvbox, Nord, Rosé Pine,

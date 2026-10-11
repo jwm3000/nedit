@@ -279,6 +279,7 @@ fn gallery(app: &mut App, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
         entries.push((None, label, p, Some("Omarchy")));
     }
     entries.push((Some("nedit".into()), "nEdit Ink".into(), Palette::default_dark(), Some(tr!("Standard" | "Default"))));
+    entries.push((Some("nedit-light".into()), "nEdit Light".into(), Palette::nedit_light(), Some(tr!("hell" | "light"))));
     for name in theme::all_theme_names() {
         if let Some(p) = cached_palette(ctx, &name) {
             let badge = if p.dark { None } else { Some(tr!("hell" | "light")) };
@@ -806,7 +807,7 @@ impl App {
             });
             ui.add_space(4.0);
         }
-        let mut list: Vec<(String, String)> = vec![("nedit".into(), "nEdit Ink".into())];
+        let mut list: Vec<(String, String)> = vec![("nedit".into(), "nEdit Ink".into()), ("nedit-light".into(), "nEdit Light".into())];
         list.extend(theme::all_theme_names().into_iter().map(|n| (n.clone(), theme::pretty_name(&n))));
         let cols = 3;
         let gap = 10.0;
@@ -819,7 +820,11 @@ impl App {
                     ui.add_space(4.0);
                     ui.spacing_mut().item_spacing.x = gap;
                     for (key, label) in chunk {
-                        let p = if key == "nedit" { Some(Palette::default_dark()) } else { cached_palette(ctx, key) };
+                        let p = match key.as_str() {
+                            "nedit" => Some(Palette::default_dark()),
+                            "nedit-light" => Some(Palette::nedit_light()),
+                            _ => cached_palette(ctx, key),
+                        };
                         let Some(p) = p else { continue };
                         let selected = self.settings.theme.as_deref() == Some(key.as_str()) || (key == "nedit" && follow && !omarchy);
                         if theme_tile(ui, pal, &p, label, selected, tw) {

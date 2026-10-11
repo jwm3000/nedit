@@ -277,6 +277,7 @@ impl App {
                 (ic::BOOKMARK, tr!("Hilfe & Tastenkürzel" | "Help & shortcuts").into(), Cmd::Help),
                 (ic::MAGIC, tr!("Theme: Omarchy folgen" | "Theme: follow Omarchy").into(), Cmd::Theme(None)),
                 (ic::MOON, "Theme: nEdit Ink".into(), Cmd::Theme(Some("nedit".into()))),
+                (ic::SUN, "Theme: nEdit Light".into(), Cmd::Theme(Some("nedit-light".into()))),
             ];
             if !q.is_empty() {
                 for name in crate::theme::all_theme_names() {

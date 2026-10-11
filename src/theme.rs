@@ -102,6 +102,29 @@ impl Palette {
         )
     }
 
+    /// Light counterpart of nEdit Ink: warm paper, ink-black text, a deeper amber accent
+    /// (enough contrast on white) and darkened syntax colors.
+    pub fn nedit_light() -> Self {
+        Self::from_raw(
+            "nEdit Light",
+            Raw {
+                mode: Some("light".into()),
+                background: hex("#fbf9f5"),
+                foreground: hex("#2a2b33"),
+                accent: hex("#b8711c"),
+                selection: hex("#f1dcbc"),
+                red: hex("#c2414e"),
+                yellow: hex("#9a6a08"),
+                orange: hex("#b8711c"),
+                green: hex("#3d8659"),
+                cyan: hex("#23808a"),
+                blue: hex("#3a62c4"),
+                magenta: hex("#8650b5"),
+                ..Default::default()
+            },
+        )
+    }
+
     fn from_raw(name: &str, r: Raw) -> Self {
         let bg = r.background.unwrap_or(Color32::from_rgb(22, 23, 29));
         let fg = r.foreground.unwrap_or(Color32::from_rgb(212, 214, 222));
@@ -378,6 +401,11 @@ pub fn load_omarchy_current() -> Option<Palette> {
 }
 
 pub fn load_named(name: &str) -> Option<Palette> {
+    match name {
+        "nedit" => return Some(Palette::default_dark()),
+        "nedit-light" => return Some(Palette::nedit_light()),
+        _ => {}
+    }
     if let Some((_, p)) = list_themes().into_iter().find(|(n, _)| n == name) {
         if let Some(pal) = Palette::load_dir(&p, name) {
             return Some(pal);

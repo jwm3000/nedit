@@ -1209,6 +1209,7 @@ fn load_palette(s: &Settings) -> Palette {
     let env_theme = std::env::var("NEDIT_THEME").ok();
     match env_theme.as_ref().or(s.theme.as_ref()) {
         Some(name) if name == "nedit" => Palette::default_dark(),
+        Some(name) if name == "nedit-light" => Palette::nedit_light(),
         Some(name) => theme::load_named(name).unwrap_or_else(Palette::default_dark),
         None => theme::load_omarchy_current().unwrap_or_else(Palette::default_dark),
     }
