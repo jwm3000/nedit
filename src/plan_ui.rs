@@ -13,11 +13,13 @@ pub struct PlanUi {
     input: String,
     note_mode: bool,
     tag_filter: Option<String>,
-    show_done: bool,
     show_source: bool,
     editing: Option<(u64, String)>,
     deadline_edit: Option<String>,
     goal_edit: Option<String>,
+    page_goal_edit: Option<String>,
+    /// focus this widget once no mouse button is pressed (a click elsewhere would take it away)
+    focus_later: Option<Id>,
     /// (time of the last scan, words in the thesis, TODOs in the sources)
     scan: Option<(f64, usize, Vec<SourceTodo>)>,
 }
@@ -98,6 +100,15 @@ impl App {
         let today = plan::today();
         let (words, source_todos) = self.plan_scan(now);
         let mut changed = false;
+        if let Some(id) = self.plan_ui.focus_later {
+            if !ui.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
+                ui.ctx().memory_mut(|m| m.request_focus(id));
+                if ui.ctx().memory(|m| m.has_focus(id)) {
+                    self.plan_ui.focus_later = None;
+                }
+            }
+            ui.ctx().request_repaint();
+        }
 
         // ── header: deadline, progress, words ──
         ui.horizontal_top(|ui| {
@@ -168,6 +179,32 @@ impl App {
                     }
                 });
             });
+            // pages of the compiled thesis
+            let pages = self.thesis.viewer.page_count();
+            stat(ui, &pal, |ui| {
+                let goal = self.plan.page_goal.unwrap_or(0);
+                let f = if goal == 0 { 0.0 } else { pages as f32 / goal as f32 };
+                ring(ui, f, &format!("{:.0}%", (f * 100.0).min(999.0)), pal.cyan, &pal);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(tr!("SEITEN (PDF)" | "PAGES (PDF)")).font(widgets::ui_font(10.0)).color(pal.dim).extra_letter_spacing(1.0));
+                    if let Some(s) = &mut self.plan_ui.page_goal_edit {
+                        let r = ui.add(egui::TextEdit::singleline(s).hint_text("80").desired_width(70.0));
+                        r.request_focus();
+                        if r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.plan.page_goal = s.chars().filter(char::is_ascii_digit).collect::<String>().parse().ok().filter(|g| *g > 0);
+                            self.plan_ui.page_goal_edit = None;
+                            changed = true;
+                        }
+                    } else {
+                        let t = if goal > 0 { format!("{pages} / {goal}") } else { format!("{pages}  ·  {}", tr!("Ziel setzen" | "set a goal")) };
+                        if ui.add(egui::Label::new(egui::RichText::new(t).font(widgets::bold_font(13.5)).color(pal.bright)).sense(Sense::click())).on_hover_text(tr!("Klicken: Seitenziel setzen" | "Click: set a page goal")).clicked() {
+                            self.plan_ui.page_goal_edit = Some(goal.to_string());
+                        }
+                    }
+                });
+            });
+            // pomodoro tomato
+            self.pomodoro_card(ui, &pal, now);
         });
         ui.add_space(14.0);
 
@@ -192,8 +229,24 @@ impl App {
                     } else {
                         tr!("Neue Aufgabe … z. B. „Kapitel 3 überarbeiten bis Freitag #methodik !“" | "New task … e.g. “revise chapter 3 by friday #method !”")
                     };
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.plan_ui.input).id(Id::new("plan-capture")).hint_text(hint).font(widgets::ui_font(14.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    // Enter is taken before the field sees it (works with input methods, too)
+                    let focused = ui.ctx().memory(|m| m.has_focus(Id::new("plan-capture")));
+                    let enter_key = focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                    let add_clicked = ui
+                        .with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            let b = widgets::button(ui, ic::PLUS, tr!("Hinzufügen" | "Add"), &pal, widgets::BtnKind::Primary).clicked();
+                            ui.add(egui::TextEdit::singleline(&mut self.plan_ui.input).id(Id::new("plan-capture")).hint_text(hint).font(widgets::ui_font(14.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
+                            b
+                        })
+                        .inner;
+                    let r = ui.ctx().memory(|m| m.has_focus(Id::new("plan-capture")));
+                    let _ = r;
+                    // a newline committed by an input method counts as Enter, too
+                    let newline = self.plan_ui.input.contains('\n');
+                    if newline {
+                        self.plan_ui.input = self.plan_ui.input.replace('\n', " ");
+                    }
+                    let enter = enter_key || add_clicked || newline;
                     if enter && !self.plan_ui.input.trim().is_empty() {
                         let input = std::mem::take(&mut self.plan_ui.input);
                         if self.plan_ui.note_mode {
@@ -203,7 +256,7 @@ impl App {
                             self.plan.add_task(plan::parse_capture(&input, today));
                         }
                         changed = true;
-                        r.request_focus();
+                        self.plan_ui.focus_later = Some(Id::new("plan-capture"));
                     }
                 });
                 // live preview of what was understood
@@ -242,6 +295,14 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tr!("Aufgaben" | "Tasks")).font(widgets::display_font(20.0)).color(pal.bright));
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            let n_done = self.plan.tasks.iter().filter(|t| t.done).count();
+                            if n_done > 0 {
+                                let label = if self.plan.hide_done { trf!("{n_done} erledigte anzeigen" | "show {n_done} done") } else { trf!("{n_done} erledigte ausblenden" | "hide {n_done} done") };
+                                if widgets::chip(ui, if self.plan.hide_done { ic::EYE } else { ic::CHECK }, &label, false, pal.green, &pal).clicked() {
+                                    self.plan.hide_done = !self.plan.hide_done;
+                                    changed = true;
+                                }
+                            }
                             for t in self.plan.all_tags().into_iter().rev() {
                                 let sel = self.plan_ui.tag_filter.as_deref() == Some(t.as_str());
                                 if widgets::chip(ui, "", &format!("#{t}"), sel, pal.magenta, &pal).clicked() {
@@ -265,7 +326,7 @@ impl App {
                             .plan
                             .tasks
                             .iter()
-                            .filter(|t| !t.done && plan::group_of(t, today) == g)
+                            .filter(|t| (!t.done || !self.plan.hide_done) && task_group(t, today) == g)
                             .filter(|t| self.plan_ui.tag_filter.as_ref().is_none_or(|f| t.tags.contains(f)))
                             .cloned()
                             .collect();
@@ -273,11 +334,13 @@ impl App {
                             continue;
                         }
                         any = true;
-                        items.sort_by(|a, b| b.important.cmp(&a.important).then(a.due.cmp(&b.due)).then(a.id.cmp(&b.id)));
+                        // open first, finished ones (struck through) at the end of their group
+                        items.sort_by(|a, b| a.done.cmp(&b.done).then(b.important.cmp(&a.important)).then(a.due.cmp(&b.due)).then(a.id.cmp(&b.id)));
+                        let open_n = items.iter().filter(|t| !t.done).count();
                         ui.horizontal(|ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                             ui.painter().circle_filled(r.center(), 4.0, col);
-                            ui.label(egui::RichText::new(format!("{}  {}", label.to_uppercase(), items.len())).font(widgets::ui_font(10.5)).color(col).extra_letter_spacing(1.0));
+                            ui.label(egui::RichText::new(format!("{}  {}", label.to_uppercase(), open_n)).font(widgets::ui_font(10.5)).color(col).extra_letter_spacing(1.0));
                         });
                         ui.add_space(2.0);
                         for t in items {
@@ -313,21 +376,6 @@ impl App {
                         }
                         ui.add_space(10.0);
                     }
-                    // done
-                    let done: Vec<plan::Task> = self.plan.tasks.iter().filter(|t| t.done).cloned().collect();
-                    if !done.is_empty() {
-                        let open = self.plan_ui.show_done;
-                        if ui.add(egui::Label::new(egui::RichText::new(format!("{}  {}  {}", if open { ic::CHEVRON_DOWN } else { ic::CHEVRON_RIGHT }, tr!("ERLEDIGT" | "DONE"), done.len())).font(widgets::ui_font(10.5)).color(pal.green).extra_letter_spacing(1.0)).sense(Sense::click())).clicked() {
-                            self.plan_ui.show_done = !open;
-                        }
-                        if open {
-                            let mut done = done;
-                            done.sort_by(|a, b| b.done_at.cmp(&a.done_at));
-                            for t in done {
-                                self.task_row(ui, &pal, &t, today, col_w, &mut toggle, &mut delete_task, &mut open_paper, &mut changed);
-                            }
-                        }
-                    }
                 });
                 // notes
                 ui.allocate_ui_with_layout(vec2(col_w, 10.0), egui::Layout::top_down(Align::Min), |ui| {
@@ -338,7 +386,7 @@ impl App {
                             if widgets::button(ui, ic::PLUS, tr!("Notiz" | "Note"), &pal, widgets::BtnKind::Ghost).clicked() {
                                 let id = self.plan.add_note("", "");
                                 changed = true;
-                                ui.ctx().memory_mut(|m| m.request_focus(Id::new(("note-title", id))));
+                                self.plan_ui.focus_later = Some(Id::new(("note-title", id)));
                             }
                         });
                     });
@@ -424,14 +472,19 @@ impl App {
                 let f = egui::TextFormat {
                     font_id: widgets::ui_font(13.5),
                     color: if is_cite { pal.accent } else { col },
-                    strikethrough: if t.done { Stroke::new(1.0, pal.dim) } else { Stroke::NONE },
                     ..Default::default()
                 };
                 job.append(&format!("{word} "), 0.0, f);
             }
             let g = ui.painter().layout_job(job);
             let tr_ = Rect::from_min_size(pos2(x, row.center().y - g.size().y / 2.0), g.size());
+            let text_w = g.size().x.min(row.max.x - 150.0 - x);
             ui.painter().with_clip_rect(Rect::from_min_max(row.min, pos2(row.max.x - 150.0, row.max.y))).galley(tr_.min, g, col);
+            // strike-through drawn from left to right when the task gets done
+            if anim > 0.0 {
+                let y = tr_.center().y + 1.0;
+                ui.painter().line_segment([pos2(x - 2.0, y), pos2(x - 2.0 + (text_w + 4.0) * anim, y)], Stroke::new(1.6, with_alpha(pal.dim, 220)));
+            }
             // @cite → open the paper
             if resp.clicked() {
                 if let Some(k) = t.text.split_whitespace().find(|w| w.starts_with('@')).map(|w| w[1..].trim_matches(|c: char| !c.is_alphanumeric() && c != ':' && c != '-').to_string()) {
@@ -509,20 +562,16 @@ impl App {
         let mut order: Vec<usize> = (0..self.plan.notes.len()).collect();
         order.sort_by(|a, b| {
             let (x, y) = (&self.plan.notes[*a], &self.plan.notes[*b]);
-            y.pinned.cmp(&x.pinned).then(y.updated.cmp(&x.updated))
+            // stable while typing: pinned first, then newest by creation
+            y.pinned.cmp(&x.pinned).then(y.created.cmp(&x.created)).then(y.id.cmp(&x.id))
         });
         let gap = 12.0;
         let cw = (w - gap) / 2.0;
         let mut delete: Option<u64> = None;
-        // two columns, each card goes to the shorter one (masonry)
-        let mut heights = [0.0f32; 2];
+        // two columns, alternating – a note never jumps to the other column while typing
         let mut cols: [Vec<usize>; 2] = [vec![], vec![]];
-        for i in order {
-            let n = &self.plan.notes[i];
-            let est = 70.0 + (n.body.len() as f32 / 34.0).ceil() * 18.0 + n.body.matches('\n').count() as f32 * 18.0;
-            let c = if heights[0] <= heights[1] { 0 } else { 1 };
-            heights[c] += est;
-            cols[c].push(i);
+        for (k, i) in order.into_iter().enumerate() {
+            cols[k % 2].push(i);
         }
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
@@ -624,6 +673,14 @@ impl App {
         if name.contains("cap") && self.plan_ui.input.is_empty() {
             self.plan_ui.input = "Kapitel 3 überarbeiten bis Freitag #methodik !".into();
         }
+    }
+}
+
+/// Group of a task in the list; finished tasks are never "overdue".
+fn task_group(t: &plan::Task, today: chrono::NaiveDate) -> Group {
+    match plan::group_of(t, today) {
+        Group::Overdue if t.done => Group::Today,
+        g => g,
     }
 }
 

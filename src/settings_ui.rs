@@ -650,6 +650,57 @@ impl App {
                 self.settings.save();
             }
         });
+        heading(ui, pal, "Pomodoro");
+        card(ui, pal, |ui| {
+            let mut v = [self.settings.pomo_work as f32, self.settings.pomo_short as f32, self.settings.pomo_long as f32, self.settings.pomo_rounds as f32];
+            let mut ch = false;
+            for (i, (title, desc, min, max, unit)) in [
+                (tr!("Fokus" | "Focus"), tr!("Länge einer Arbeitsrunde" | "Length of a work round"), 5.0, 90.0, "min"),
+                (tr!("Kurze Pause" | "Short break"), "", 1.0, 30.0, "min"),
+                (tr!("Lange Pause" | "Long break"), tr!("Nach allen Runden" | "After all rounds"), 5.0, 60.0, "min"),
+                (tr!("Runden" | "Rounds"), tr!("Arbeitsrunden bis zur langen Pause" | "Work rounds before the long break"), 2.0, 8.0, "×"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if i > 0 {
+                    divider(ui, pal);
+                }
+                row(ui, pal, title, desc, |ui| {
+                    if widgets::fancy_slider(ui, &mut v[i], min, max, 1.0, unit, pal).changed() {
+                        ch = true;
+                    }
+                });
+            }
+            if ch {
+                self.settings.pomo_work = v[0].round() as u32;
+                self.settings.pomo_short = v[1].round() as u32;
+                self.settings.pomo_long = v[2].round() as u32;
+                self.settings.pomo_rounds = v[3].round() as u32;
+                self.settings.save();
+            }
+            divider(ui, pal);
+            let mut sound = self.settings.pomo_sound;
+            let mut test = false;
+            row(ui, pal, tr!("Klang am Ende" | "Chime at the end"), tr!("Ein kurzer Glockenton nach jeder Phase" | "A short bell after each phase"), |ui| {
+                if toggle(ui, &mut sound, pal).changed() {
+                    self.settings.pomo_sound = sound;
+                    self.settings.save();
+                }
+                test = widgets::button(ui, ic::PLAY, tr!("Testen" | "Test"), pal, widgets::BtnKind::Ghost).clicked();
+            });
+            if test {
+                crate::pomodoro::play_chime();
+            }
+            divider(ui, pal);
+            let mut fl = self.settings.pomo_float;
+            row(ui, pal, tr!("Tomate anzeigen" | "Show the tomato"), tr!("Schwebend über allem, per Drag & Drop verschiebbar" | "Floating above everything, move it by dragging"), |ui| {
+                if toggle(ui, &mut fl, pal).changed() {
+                    self.settings.pomo_float = fl;
+                    self.settings.save();
+                }
+            });
+        });
         heading(ui, pal, "Updates");
         card(ui, pal, |ui| {
             let checking = self.updater.checking;
@@ -902,6 +953,13 @@ impl App {
         menu_line(ui, pal, tr!("Automatisch kompilieren" | "Compile automatically"), |ui| {
             if toggle(ui, &mut auto, pal).changed() {
                 self.settings.auto_compile = auto;
+                self.settings.save();
+            }
+        });
+        let mut tomato = self.settings.pomo_float;
+        menu_line(ui, pal, tr!("Pomodoro-Tomate" | "Pomodoro tomato"), |ui| {
+            if toggle(ui, &mut tomato, pal).changed() {
+                self.settings.pomo_float = tomato;
                 self.settings.save();
             }
         });

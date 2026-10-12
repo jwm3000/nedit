@@ -41,6 +41,11 @@ pub struct Plan {
     /// submission date, ISO
     pub deadline: Option<String>,
     pub word_goal: Option<u32>,
+    pub page_goal: Option<u32>,
+    /// hide finished tasks (they are shown struck through otherwise)
+    pub hide_done: bool,
+    /// finished pomodoros per day (ISO date → count)
+    pub pomodoros: std::collections::BTreeMap<String, u32>,
     #[serde(skip)]
     path: PathBuf,
     #[serde(skip)]

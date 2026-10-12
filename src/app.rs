@@ -43,11 +43,20 @@ pub struct Settings {
     pub show_stage: bool,
     /// Visual mode: show \includegraphics as images (resizable) instead of code.
     pub visual_images: bool,
+    /// Pomodoro: minutes of work / short break / long break, work rounds before the long break
+    pub pomo_work: u32,
+    pub pomo_short: u32,
+    pub pomo_long: u32,
+    pub pomo_rounds: u32,
+    pub pomo_sound: bool,
+    /// show the floating tomato
+    pub pomo_float: bool,
+    pub pomo_pos: Option<[f32; 2]>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_pos: None }
     }
 }
 
@@ -245,6 +254,7 @@ pub struct App {
     pub help_open: bool,
     pub plan: crate::plan::Plan,
     pub plan_ui: crate::plan_ui::PlanUi,
+    pub pomo: crate::pomodoro::Pomodoro,
     /// Figures for the visual mode: absolute path → (file stamp, texture).
     figs: HashMap<std::path::PathBuf, (u64, Option<egui::TextureHandle>)>,
     /// Per file: (text hash, path as written → texture id + size).
@@ -335,6 +345,7 @@ impl App {
             help_open: false,
             plan: Default::default(),
             plan_ui: Default::default(),
+            pomo: Default::default(),
             figs: Default::default(),
             fig_index: Default::default(),
             deps: None,
@@ -1370,6 +1381,44 @@ impl eframe::App for App {
                         }
                         self.debug_typed += 1;
                     }
+                    if name.contains("plantest") && self.debug_typed < 18060 {
+                        if self.debug_typed < 18000 {
+                            self.debug_typed = 18000;
+                        }
+                        let k = self.debug_typed - 18000;
+                        let key = |key: egui::Key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+                        let log = |app: &App, l: &str| eprintln!("PLAN {l}: tasks={:?} notes={:?} focus={:?}", app.plan.tasks.iter().map(|t| (t.text.clone(), t.done)).collect::<Vec<_>>(), app.plan.notes.iter().map(|n| (n.title.clone(), n.body.clone())).collect::<Vec<_>>(), ctx.memory(|m| m.focused()));
+                        match k {
+                            1 => {
+                                if let Some(r) = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dbg-capture-rect"))) {
+                                    raw.events.push(egui::Event::PointerMoved(r.center()));
+                                }
+                            }
+                            2 => {
+                                if let Some(r) = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dbg-capture-rect"))) {
+                                    raw.events.push(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+                                }
+                            }
+                            3 => {
+                                if let Some(r) = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dbg-capture-rect"))) {
+                                    raw.events.push(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+                                }
+                                eprintln!("PLAN click done, focus={:?}", ctx.memory(|m| m.focused()));
+                            }
+                            4 => {
+                                eprintln!("PLAN before typing, focus={:?}", ctx.memory(|m| m.focused()));
+                                raw.events.push(egui::Event::Text("Testaufgabe morgen".into()));
+                            }
+                            6 => raw.events.push(key(egui::Key::Enter)),
+                            9 => log(self, "after enter"),
+                            // type into the body of the "Idee" note (id 8), one char per frame
+                            10 => ctx.memory_mut(|m| m.request_focus(egui::Id::new(("note-body", 8u64)))),
+                            12..=25 => raw.events.push(egui::Event::Text(" Neuer Gedanke".chars().nth(k as usize - 12).map(|c| c.to_string()).unwrap_or_default())),
+                            28 => log(self, "after typing into note"),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
                     if name.contains("setdrag") && self.debug_typed < 17030 {
                         // drag the settings window by its title
                         if self.debug_typed < 17000 {
@@ -1749,6 +1798,7 @@ impl eframe::App for App {
             self.debug_shots(&ctx, now, &spec);
         }
         self.periodic(&ctx, now);
+        self.pomodoro_tick(&ctx, now);
         self.handle_drops(&ctx, now);
 
         if self.present.is_some() {
@@ -1764,6 +1814,7 @@ impl eframe::App for App {
             self.about_window(&ctx, &pal);
             self.help_window(&ctx, &pal);
             self.settings_window(&ctx, &pal);
+            self.pomodoro_float(&ctx, &pal, now);
             self.quick_ui(&ctx, now);
             self.draw_toasts(&ctx, &pal, now);
             return;
@@ -1785,6 +1836,7 @@ impl eframe::App for App {
         self.about_window(&ctx, &pal);
         self.help_window(&ctx, &pal);
         self.settings_window(&ctx, &pal);
+        self.pomodoro_float(&ctx, &pal, now);
         self.quick_ui(&ctx, now);
         self.draw_toasts(&ctx, &pal, now);
     }
@@ -2007,6 +2059,16 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(small(format!("{}  {}", ic::BRUSH, self.pal.name), pal.dim));
                         ui.add_space(10.0);
+                        // running pomodoro → open the plan
+                        if self.pomo.running || self.pomo.waiting() {
+                            let txt = format!("{}  {}  {}", ic::CLOCK, self.pomo.phase_name(), self.pomo.label(&self.settings));
+                            let r = ui.add(egui::Label::new(small(txt, pal.red)).sense(egui::Sense::click())).on_hover_text(tr!("Pomodoro – Klick öffnet den Plan" | "Pomodoro – click opens the plan"));
+                            if r.clicked() {
+                                self.tab = Tab::Shelf;
+                                self.shelf_ui.plan_view = true;
+                            }
+                            ui.add_space(10.0);
+                        }
                         // missing TeX components → open the system page
                         if let Some(n) = self.deps.as_ref().map(|d| d.missing_required()).filter(|n| *n > 0) {
                             let txt = trf!("{} {n} TeX-Komponente(n) fehlen" | "{} {n} TeX component(s) missing", ic::WARN);
@@ -2739,6 +2801,10 @@ impl App {
                     b.text.insert_str(p, "\\begin{frame}{Leere Folie}\n\\end{frame}\n\n");
                 }
             }
+        }
+        if name.contains("pomo") && !self.pomo.running {
+            self.settings.pomo_float = true;
+            self.pomo.toggle(&self.settings);
         }
         if name.contains("planview") {
             self.tab = Tab::Shelf;

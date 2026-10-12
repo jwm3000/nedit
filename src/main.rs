@@ -16,6 +16,7 @@ mod icons;
 mod pdfview;
 mod plan;
 mod plan_ui;
+mod pomodoro;
 mod platform;
 mod project;
 mod quickopen;
