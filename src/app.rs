@@ -2121,13 +2121,10 @@ impl App {
                         ui.add_space(10.0);
                         // running pomodoro → open the plan
                         if self.pomo.running || self.pomo.waiting() {
-                            // fixed width (widest phase name + mono digits), so nothing jumps while it counts
+                            // mono digits keep the width steady while counting (it only changes with the phase)
                             let font = widgets::ui_font(11.5);
                             let mono = widgets::mono_font(11.5);
-                            let name_w = [tr!("Fokus" | "Focus"), tr!("Kurze Pause" | "Short break"), tr!("Lange Pause" | "Long break")]
-                                .iter()
-                                .map(|n| ui.painter().layout_no_wrap(n.to_string(), font.clone(), pal.red).size().x)
-                                .fold(0.0f32, f32::max);
+                            let name_w = ui.painter().layout_no_wrap(self.pomo.phase_name().to_string(), font.clone(), pal.red).size().x;
                             let time_w = ui.painter().layout_no_wrap("00:00".into(), mono.clone(), pal.red).size().x;
                             let (rect, r) = ui.allocate_exact_size(egui::vec2(18.0 + name_w + 8.0 + time_w, ui.available_height()), egui::Sense::click());
                             let y = rect.center().y;
