@@ -477,7 +477,8 @@ fn editor_body(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let root = app.project.root.clone();
     let marks = app.git.line_marks(&root, &rel, app.buffers[bi].disk_stamp);
     let numbers = if visual { app.heading_numbers(&rel) } else { HashMap::new() };
-    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()), cite_labels: &app.cite_labels, heading_numbers: &numbers };
+    let figs = if visual && app.settings.visual_images { app.figure_textures(ui.ctx(), &rel) } else { HashMap::new() };
+    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: false, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()), cite_labels: &app.cite_labels, heading_numbers: &numbers, show_images: app.settings.visual_images, images: &figs };
     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
     let use_vim = app.settings.input_vim && !visual;
     let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src, if use_vim { Some(&mut app.vim) } else { None });
@@ -1525,7 +1526,8 @@ fn document_body(app: &mut App, ui: &mut Ui, pal: &Palette, files: &[String], no
                     let root = app.project.root.clone();
                     let marks = app.git.line_marks(&root, f, app.buffers[bi].disk_stamp);
                     let numbers = if visual { app.heading_numbers(f) } else { HashMap::new() };
-                    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()), cite_labels: &app.cite_labels, heading_numbers: &numbers };
+                    let figs = if visual && app.settings.visual_images { app.figure_textures(ui.ctx(), f) } else { HashMap::new() };
+                    let style = EditorStyle { pal: &app.pal, syntax: &app.syntax, font_size: app.settings.font_size, style_rev: app.style_rev, issues: &issues, visual, embedded: true, git_marks: &marks, search: app.find.open.then_some(app.find.query.as_str()), cite_labels: &app.cite_labels, heading_numbers: &numbers, show_images: app.settings.visual_images, images: &figs };
                     let src = CompletionSources { cites: &app.cites, labels: &app.labels, files: &app.flat };
                     let out = editor::editor_ui(ui, &mut app.buffers[bi], &style, &src, if app.settings.input_vim && !visual { Some(&mut app.vim) } else { None });
                     if let Some(vo) = out.vim.as_ref() {

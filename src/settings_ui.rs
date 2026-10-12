@@ -448,6 +448,18 @@ impl App {
                 self.settings.save();
             }
         });
+        heading(ui, pal, tr!("Visueller Modus" | "Visual mode"));
+        card(ui, pal, |ui| {
+            let cur = self.settings.visual_images as usize;
+            let mut pick = None;
+            row(ui, pal, tr!("Bilder" | "Images"), tr!("\\includegraphics als Code-Zeile oder als Bild, das sich größer/kleiner ziehen lässt" | "\\includegraphics as a code line or as the image, resizable by dragging"), |ui| {
+                pick = segmented(ui, &[(ic::CODE, tr!("Als Code" | "As code")), (ic::IMAGE, tr!("Als Bild" | "As image"))], cur, pal, Id::new("seg-vimg"));
+            });
+            if let Some(i) = pick {
+                self.settings.visual_images = i == 1;
+                self.settings.save();
+            }
+        });
         heading(ui, pal, tr!("Kompilieren" | "Compiling"));
         card(ui, pal, |ui| {
             let mut auto = self.settings.auto_compile;
@@ -873,6 +885,13 @@ impl App {
         menu_line(ui, pal, tr!("Automatisch kompilieren" | "Compile automatically"), |ui| {
             if toggle(ui, &mut auto, pal).changed() {
                 self.settings.auto_compile = auto;
+                self.settings.save();
+            }
+        });
+        let mut vimg = self.settings.visual_images;
+        menu_line(ui, pal, tr!("Bilder im visuellen Modus" | "Images in visual mode"), |ui| {
+            if toggle(ui, &mut vimg, pal).changed() {
+                self.settings.visual_images = vimg;
                 self.settings.save();
             }
         });

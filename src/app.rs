@@ -1,5 +1,6 @@
 //! Application state, top bar, status bar, theme handling and dialogs.
 
+use std::collections::HashMap;
 use crate::compile::{self, CompileJob, CompileSpec, Issue, Level};
 use crate::editor::{Buffer, CompItem, Syntax};
 use crate::icons as ic;
@@ -40,11 +41,13 @@ pub struct Settings {
     pub slides_visual: bool,
     /// Presentation: rendered slide (stage) next to the editor.
     pub show_stage: bool,
+    /// Visual mode: show \includegraphics as images (resizable) instead of code.
+    pub visual_images: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true }
     }
 }
 
@@ -237,6 +240,10 @@ pub struct App {
     pub vim: crate::vim::VimState,
     pub about_open: bool,
     pub help_open: bool,
+    /// Figures for the visual mode: absolute path → (file stamp, texture).
+    figs: HashMap<std::path::PathBuf, (u64, Option<egui::TextureHandle>)>,
+    /// Per file: (text hash, path as written → texture id + size).
+    fig_index: HashMap<String, (u64, HashMap<String, (egui::TextureId, egui::Vec2)>)>,
     /// System check (TeX components, tools) – runs in the background at start.
     pub deps: Option<crate::deps::Report>,
     deps_rx: Option<std::sync::mpsc::Receiver<crate::deps::Report>>,
@@ -321,6 +328,8 @@ impl App {
             vim: Default::default(),
             about_open: false,
             help_open: false,
+            figs: Default::default(),
+            fig_index: Default::default(),
             deps: None,
             deps_rx: None,
             settings_open: false,
@@ -432,6 +441,49 @@ impl App {
             c.request_repaint();
         });
         self.deps_rx = Some(rx);
+    }
+
+    /// Textures for the `\includegraphics` of a file (visual mode); loads PNG/JPG directly and
+    /// the first page of PDF figures via pdftoppm. Searched in the project, next to the file
+    /// and in the `\graphicspath` of the main document.
+    pub fn figure_textures(&mut self, ctx: &egui::Context, rel: &str) -> HashMap<String, (egui::TextureId, egui::Vec2)> {
+        let Some(bi) = self.buffer_idx(rel) else { return HashMap::new() };
+        let h = crate::editor::hash_str(&self.buffers[bi].text);
+        if let Some((hh, m)) = self.fig_index.get(rel) {
+            if *hh == h {
+                return m.clone();
+            }
+        }
+        let re = regex::Regex::new(r"\\includegraphics\*?(?:\[[^\]]*\])?\{([^{}]+)\}").unwrap();
+        let paths: Vec<String> = re.captures_iter(&self.buffers[bi].text).map(|c| c[1].trim().to_string()).collect();
+        let root = self.project.root.clone();
+        let mut dirs = vec![root.clone()];
+        if let Some(p) = std::path::Path::new(rel).parent() {
+            dirs.push(root.join(p));
+        }
+        let main = self.read_source(&self.project.config.thesis_main.clone()).unwrap_or_default();
+        if let Some(c) = regex::Regex::new(r"\\graphicspath\{((?:\{[^{}]*\})+)\}").unwrap().captures(&main) {
+            for d in regex::Regex::new(r"\{([^{}]*)\}").unwrap().captures_iter(&c[1]) {
+                dirs.push(root.join(d[1].trim()));
+            }
+        }
+        let mut out = HashMap::new();
+        for p in paths {
+            let pr = p.as_str();
+            let found = dirs.iter().flat_map(|d| ["", ".pdf", ".png", ".jpg", ".jpeg"].iter().map(move |e| d.join(format!("{pr}{e}")))).find(|f| f.is_file());
+            let Some(f) = found else { continue };
+            let stamp = crate::pdfview::file_stamp(&f);
+            let fresh = self.figs.get(&f).is_some_and(|(s, _)| *s == stamp);
+            if !fresh {
+                let tex = load_figure(ctx, &f);
+                self.figs.insert(f.clone(), (stamp, tex));
+            }
+            if let Some((_, Some(t))) = self.figs.get(&f) {
+                out.insert(p, (t.id(), t.size_vec2()));
+            }
+        }
+        self.fig_index.insert(rel.to_string(), (h, out.clone()));
+        out
     }
 
     /// PDF preview on/off for whatever is visible: document mode, full screen (floating PDF),
@@ -1276,6 +1328,49 @@ impl eframe::App for App {
                             }
                             9 => eprintln!("KEYS show_pdf after Ctrl+L = {}", self.settings.show_pdf),
                             _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("imgtest") && self.debug_typed < 16060 {
+                        if self.debug_typed < 16000 {
+                            self.debug_typed = 16000;
+                        }
+                        let k = self.debug_typed - 16000;
+                        let first: Option<usize> = ctx.data(|d| d.get_temp(egui::Id::new("dbg-img-first")));
+                        let rects: Option<(egui::Rect, egui::Rect)> = first.and_then(|s| ctx.data(|d| d.get_temp(egui::Id::new(("dbg-img", s)))));
+                        let fixed = egui::Id::new("dbg-img-fixed");
+                        if k == 2 {
+                            if let Some(r) = rects {
+                                ctx.data_mut(|d| d.insert_temp(fixed, r));
+                            }
+                        }
+                        let r: Option<(egui::Rect, egui::Rect)> = ctx.data(|d| d.get_temp(fixed));
+                        let log = |app: &App, label: &str| {
+                            if let Some(a) = app.thesis.active.clone() {
+                                if let Some(i) = app.buffer_idx(&a) {
+                                    let t = &app.buffers[i].text;
+                                    let l: Vec<&str> = t.lines().filter(|l| l.contains("includegraphics")).collect();
+                                    eprintln!("IMG {label}: {l:?}");
+                                }
+                            }
+                        };
+                        let press = |p: egui::Pos2, down: bool| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: down, modifiers: egui::Modifiers::NONE };
+                        if let Some((img, handle)) = r {
+                            // "+" button sits at the right end of the pill in the top-left corner
+                            let plus = egui::pos2(img.min.x + 6.0 + 112.0 - 15.0, img.min.y + 19.0);
+                            match k {
+                                3 => log(self, "before"),
+                                4 => raw.events.push(egui::Event::PointerMoved(handle.center())),
+                                5 => raw.events.push(press(handle.center(), true)),
+                                6..=15 => raw.events.push(egui::Event::PointerMoved(handle.center() - egui::vec2((k - 5) as f32 * 12.0, 0.0))),
+                                16 => raw.events.push(press(handle.center() - egui::vec2(120.0, 0.0), false)),
+                                20 => log(self, "after drag left 120px"),
+                                22 => raw.events.push(egui::Event::PointerMoved(plus)),
+                                23 => raw.events.push(press(plus, true)),
+                                24 => raw.events.push(press(plus, false)),
+                                28 => log(self, "after +"),
+                                _ => {}
+                            }
                         }
                         self.debug_typed += 1;
                     }
@@ -2228,8 +2323,12 @@ impl App {
             let f = if self.project.root.join("content/introduction.tex").exists() { "content/introduction.tex" } else { "kapitel/einleitung.tex" };
             self.open_file(f, Tab::Thesis);
         }
+        if name.contains("design") && self.thesis.active.as_deref() != Some("content/design.tex") {
+            self.open_file("content/design.tex", Tab::Thesis);
+        }
         if name.contains("visual") {
             self.settings.visual = true;
+            self.settings.visual_images = true;
         }
         if !name.contains("comp") && !name.contains("snip") && !name.contains("click") {
             if let Some(b) = self.active_buffer_mut(Tab::Thesis) {
@@ -2440,4 +2539,28 @@ pub fn fmt_thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// Load a figure as texture: images directly, PDFs (first page) through pdftoppm.
+fn load_figure(ctx: &egui::Context, f: &std::path::Path) -> Option<egui::TextureHandle> {
+    let ext = f.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let img = if ext == "pdf" {
+        let tmp = std::env::temp_dir().join(format!("nedit-fig-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let out = tmp.join(format!("{:x}", crate::editor::hash_str(&f.to_string_lossy())));
+        let ok = crate::platform::cmd("pdftoppm").args(["-png", "-r", "110", "-f", "1", "-l", "1", "-singlefile"]).arg(f).arg(&out).status().is_ok_and(|s| s.success());
+        if !ok {
+            return None;
+        }
+        let png = out.with_extension("png");
+        let i = image::open(&png).ok();
+        let _ = std::fs::remove_file(&png);
+        i
+    } else {
+        image::open(f).ok()
+    }?;
+    let img = img.thumbnail(1600, 1600).to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let ci = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    Some(ctx.load_texture(format!("fig-{}", f.display()), ci, egui::TextureOptions::LINEAR))
 }

@@ -29,6 +29,39 @@ pub enum Vs {
     Markup(&'static Vs),
     /// Hidden markup that is shown as a typographic glyph (°, …, –, “ …) – painted by the editor.
     Glyph(&'static str, &'static Vs),
+    /// A line that is only `\includegraphics[…]{…}` – shown as the image itself (optional).
+    Image,
+}
+
+/// Path and width fraction (of the line width) of an `\includegraphics[…]{path}` command.
+pub fn image_info(cmd: &str) -> Option<(String, f32)> {
+    let re = regex::Regex::new(r"^\\includegraphics\*?(?:\[([^\]]*)\])?\{([^{}]+)\}\s*(%.*)?$").unwrap();
+    let m = re.captures(cmd.trim())?;
+    let opts = m.get(1).map_or("", |x| x.as_str());
+    let frac = regex::Regex::new(r"width\s*=\s*([0-9.]*)\s*\\(?:linewidth|textwidth|columnwidth|hsize)")
+        .unwrap()
+        .captures(opts)
+        .map(|c| c[1].parse::<f32>().unwrap_or(1.0))
+        .unwrap_or(0.8);
+    Some((m[2].trim().to_string(), frac.clamp(0.05, 1.0)))
+}
+
+/// The same command with `width=<frac>\linewidth` (other options are kept).
+pub fn set_image_width(cmd: &str, frac: f32) -> String {
+    let frac = (frac * 100.0).round() / 100.0;
+    let w = if (frac - 1.0).abs() < 0.001 { "width=\\linewidth".to_string() } else { format!("width={frac}\\linewidth") };
+    let re = regex::Regex::new(r"^(\s*\\includegraphics\*?)(?:\[([^\]]*)\])?(\{.*)$").unwrap();
+    let Some(m) = re.captures(cmd) else { return cmd.to_string() };
+    let opts = m.get(2).map_or("", |x| x.as_str());
+    let width_re = regex::Regex::new(r"width\s*=\s*[0-9.]*\s*\\(?:linewidth|textwidth|columnwidth|hsize)").unwrap();
+    let new_opts = if width_re.is_match(opts) {
+        width_re.replace(opts, w.as_str()).to_string()
+    } else {
+        // drop absolute sizes / scale that would fight the new width
+        let keep: Vec<&str> = opts.split(',').map(str::trim).filter(|o| !o.is_empty() && !o.starts_with("width") && !o.starts_with("scale") && !o.starts_with("height")).collect();
+        std::iter::once(w.as_str()).chain(keep).collect::<Vec<_>>().join(",")
+    };
+    format!("{}[{}]{}", &m[1], new_opts, &m[3])
 }
 
 /// Typographic replacements for symbol commands.
@@ -492,6 +525,11 @@ pub fn spans(text: &str) -> (Vec<Span>, Vec<Decor>) {
             o.push(ts, le, Vs::Code);
             continue;
         }
+        if t.starts_with("\\includegraphics") && image_info(t_trim).is_some() {
+            o.push(ts, ce, Vs::Image);
+            o.push(ce, le, Vs::Body);
+            continue;
+        }
         if t.starts_with("\\item") && !t[5..].starts_with(|c: char| c.is_ascii_alphabetic()) {
             let depth = lists.len().max(1) as u8;
             let mut j = ts + 5;
@@ -547,6 +585,18 @@ pub struct VisualTheme {
     pub chip_bg: Color32,
     /// citation key → "Author Year"
     pub cites: std::collections::HashMap<String, String>,
+    /// Show `\includegraphics` lines as images; image path → aspect ratio (height / width).
+    pub show_images: bool,
+    pub image_aspect: std::collections::HashMap<String, f32>,
+}
+
+/// Height reserved for an image line (image + padding), given the wrap width.
+pub fn image_row_height(cmd: &str, th: &VisualTheme, wrap: f32) -> f32 {
+    let Some((path, frac)) = image_info(cmd) else { return 0.0 };
+    match th.image_aspect.get(&path) {
+        Some(a) => (wrap * frac * a).min(wrap * 1.2) + 18.0,
+        None => 70.0,
+    }
 }
 
 /// "Hopfner 2019; Malzbauer & Gerstner 2021" for the keys inside \cite{…}.
@@ -587,6 +637,8 @@ impl VisualTheme {
             env: mix(p.magenta, p.dim, 0.4),
             chip_bg: with_alpha(p.text, 16),
             cites: Default::default(),
+            show_images: false,
+            image_aspect: Default::default(),
         }
     }
 }
@@ -648,7 +700,7 @@ fn format_for(st: Vs, th: &VisualTheme, revealed: bool) -> TextFormat {
             f.italics = true;
             f.line_height = lh(sz * 0.72, 1.6);
         }
-        Vs::Code => {
+        Vs::Code | Vs::Image => {
             f.font_id = FontId::new(sz * 0.74, FontFamily::Monospace);
             f.color = th.dim;
             f.line_height = lh(sz * 0.74, 1.55);
@@ -684,7 +736,7 @@ fn format_for(st: Vs, th: &VisualTheme, revealed: bool) -> TextFormat {
 }
 
 /// Build the layout job. `raw` = byte range shown as source (cursor line).
-pub fn layout_job(text: &str, spans: &[Span], th: &VisualTheme, raw: Option<(usize, usize)>) -> LayoutJob {
+pub fn layout_job(text: &str, spans: &[Span], th: &VisualTheme, raw: Option<(usize, usize)>, wrap: f32) -> LayoutJob {
     let mut job = LayoutJob { text: text.to_string(), ..Default::default() };
     for sp in spans {
         let in_raw = raw.is_some_and(|(a, b)| sp.s < b.max(a + 1) && sp.e > a);
@@ -694,6 +746,17 @@ pub fn layout_job(text: &str, spans: &[Span], th: &VisualTheme, raw: Option<(usi
             fmt.color = th.dim;
         }
         let mut leading = 0.0;
+        if sp.st == Vs::Image {
+            if th.show_images && !in_raw {
+                // the row gets the height of the image; the command itself is invisible
+                fmt.font_id = FontId::new(0.5, FontFamily::Monospace);
+                fmt.color = Color32::TRANSPARENT;
+                fmt.line_height = Some(image_row_height(&text[sp.s..sp.e], th, wrap));
+                fmt.valign = egui::Align::TOP;
+            } else {
+                fmt = format_for(Vs::Code, th, false);
+            }
+        }
         if !revealed {
             if let Vs::Glyph(g, ctx) = sp.st {
                 // room for the glyph the editor paints in front of the hidden markup
@@ -751,5 +814,23 @@ mod tests {
             pos = s.e;
         }
         assert_eq!(pos, t.len());
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn image_width() {
+        assert_eq!(image_info("\\includegraphics[width=0.6\\linewidth]{figures/a}"), Some(("figures/a".into(), 0.6)));
+        assert_eq!(image_info("\\includegraphics{x.png}"), Some(("x.png".into(), 0.8)));
+        assert_eq!(image_info("\\includegraphics[width=\\textwidth]{x}").unwrap().1, 1.0);
+        assert_eq!(set_image_width("  \\includegraphics[width=0.8\\linewidth]{a}", 0.5), "  \\includegraphics[width=0.5\\linewidth]{a}");
+        assert_eq!(set_image_width("\\includegraphics{a}", 0.7), "\\includegraphics[width=0.7\\linewidth]{a}");
+        assert_eq!(set_image_width("\\includegraphics[height=3cm,angle=90]{a}", 1.0), "\\includegraphics[width=\\linewidth,angle=90]{a}");
+        // image lines become Image spans
+        let (sp, _) = spans("\\begin{document}\n\\begin{figure}\n  \\centering\n  \\includegraphics[width=0.5\\linewidth]{img}\n\\end{figure}\n");
+        assert!(sp.iter().any(|s| s.st == Vs::Image));
     }
 }

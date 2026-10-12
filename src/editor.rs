@@ -42,7 +42,7 @@ pub struct Buffer {
     pub cursor_moved: bool,
 }
 
-fn hash_str(s: &str) -> u64 {
+pub fn hash_str(s: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
@@ -882,6 +882,9 @@ pub struct EditorStyle<'a> {
     pub cite_labels: &'a HashMap<String, String>,
     /// Visual mode: line → heading number ("2.1") for this file.
     pub heading_numbers: &'a HashMap<usize, String>,
+    /// Visual mode: show `\includegraphics` lines as images (path as written → texture, size).
+    pub show_images: bool,
+    pub images: &'a HashMap<String, (egui::TextureId, egui::Vec2)>,
 }
 
 pub struct EditorOutput {
@@ -1287,6 +1290,8 @@ fn editor_core(
     let vsize = st.font_size + 3.0;
     let raw = if visual && (has_focus || buf.completion.is_some()) { Some(line_range_bytes(&buf.text, buf.cursor)) } else { None };
 
+    let mut img_edits: Vec<(usize, usize, String)> = vec![];
+    let mut img_goto: Option<usize> = None;
     let bg_idx = ui.painter().add(Shape::Noop);
     let search_idx = ui.painter().add(Shape::Noop);
     let vsel_idx = ui.painter().add(Shape::Noop);
@@ -1297,7 +1302,10 @@ fn editor_core(
     let mut vtheme = crate::visual::VisualTheme::new(pal, vsize);
     if visual {
         vtheme.cites = st.cite_labels.clone();
+        vtheme.show_images = st.show_images;
+        vtheme.image_aspect = st.images.iter().map(|(k, (_, s))| (k.clone(), s.y / s.x.max(1.0))).collect();
     }
+    let images_key = st.show_images as u64 ^ (st.images.len() as u64).rotate_left(17);
     let cites_key = st.cite_labels.len() as u64 ^ st.cite_labels.values().map(|v| v.len() as u64).sum::<u64>().rotate_left(11);
     let id = buf.id;
     let Buffer { text, hl_cache, vis_cache, .. } = buf;
@@ -1309,11 +1317,11 @@ fn editor_core(
                 let (sp, de) = crate::visual::spans(s);
                 *vis_cache = Some((th, sp, de));
             }
-            let key = th ^ rev.rotate_left(7) ^ (vsize.to_bits() as u64).rotate_left(3) ^ raw.map_or(1, |(a, b)| (a as u64) << 20 ^ b as u64) ^ 0x5151 ^ cites_key.rotate_left(29);
+            let key = th ^ rev.rotate_left(7) ^ (vsize.to_bits() as u64).rotate_left(3) ^ raw.map_or(1, |(a, b)| (a as u64) << 20 ^ b as u64) ^ 0x5151 ^ cites_key.rotate_left(29) ^ images_key.rotate_left(41) ^ (wrap.to_bits() as u64).rotate_left(13);
             match hl_cache {
                 Some((k, j)) if *k == key => j.clone(),
                 _ => {
-                    let j = crate::visual::layout_job(s, &vis_cache.as_ref().unwrap().1, &vtheme, raw);
+                    let j = crate::visual::layout_job(s, &vis_cache.as_ref().unwrap().1, &vtheme, raw, wrap);
                     *hl_cache = Some((key, j.clone()));
                     j
                 }
@@ -1517,6 +1525,103 @@ fn editor_core(
             let top = baseline.map(|b| b - own).unwrap_or(r0.center().y - g.size().y / 2.0);
             chips.push(Shape::galley(pos2(r0.min.x - w + (w - g.size().x) / 2.0, top), g, base.color));
         }
+        // images: drawn into the rows reserved by the layout, resizable
+        if st.show_images {
+            let wrap = galley.job.wrap.max_width;
+            let (mut lb, mut lc) = (0usize, 0usize);
+            for sp in spans.iter().filter(|s| s.st == crate::visual::Vs::Image) {
+                if sp.e > buf.text.len() || raw.is_some_and(|(a, b)| sp.s < b.max(a + 1) && sp.e > a) {
+                    continue;
+                }
+                lc += buf.text[lb..sp.s].chars().count();
+                lb = sp.s;
+                let r0 = galley.pos_from_cursor(CCursor::new(lc)).translate(gpos.to_vec2());
+                let Some(row) = galley.rows.iter().find(|row| {
+                    let y = gpos.y + row.pos.y;
+                    y <= r0.center().y && r0.center().y <= y + row.size.y.max(1.0)
+                }) else {
+                    continue;
+                };
+                let top = gpos.y + row.pos.y;
+                if top > clip.max.y || top + row.size.y < clip.min.y {
+                    continue;
+                }
+                let cmd = &buf.text[sp.s..sp.e];
+                let Some((path, frac0)) = crate::visual::image_info(cmd) else { continue };
+                let id = buf.id.with(("img", sp.s));
+                let frac = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(frac0);
+                let w = (wrap * frac).max(40.0);
+                let x0 = gpos.x + (wrap - w) / 2.0;
+                let img_rect = match st.images.get(&path) {
+                    Some((tex, size)) => {
+                        let ih = (w * size.y / size.x.max(1.0)).min(wrap * 1.2);
+                        let r = Rect::from_min_size(pos2(x0, top + 8.0), vec2(w, ih));
+                        chips.push(Shape::rect_filled(r.translate(vec2(0.0, 3.0)), 3.0, with_alpha(Color32::BLACK, 40)));
+                        chips.push(Shape::image(*tex, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE));
+                        r
+                    }
+                    None => {
+                        let r = Rect::from_min_size(pos2(x0, top + 8.0), vec2(w, 54.0));
+                        chips.push(Shape::rect_filled(r, 6.0, with_alpha(pal.text, 10)));
+                        chips.push(Shape::rect_stroke(r, 6.0, Stroke::new(1.0, with_alpha(pal.border, 160)), egui::StrokeKind::Inside));
+                        let g = ui.painter().layout_no_wrap(format!("{}  {path}", crate::icons::IMAGE), FontId::proportional(13.0), pal.dim);
+                        chips.push(Shape::galley(r.center() - g.size() / 2.0, g, pal.dim));
+                        r
+                    }
+                };
+                // interaction: click → edit the code line, −/+ and a corner handle to resize
+                // click_and_drag: the image (not the text below) owns presses on it
+                let resp = ui.interact(img_rect, id.with("img"), egui::Sense::click_and_drag());
+                let handle = Rect::from_center_size(img_rect.right_bottom(), vec2(16.0, 16.0));
+                let hresp = ui.interact(handle, id.with("handle"), egui::Sense::drag());
+                if std::env::var_os("NEDIT_SHOT").is_some() {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("dbg-img", sp.s)), (img_rect, handle)));
+                    if ui.ctx().data(|d| d.get_temp::<usize>(egui::Id::new("dbg-img-first")).is_none()) {
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("dbg-img-first"), sp.s));
+                    }
+                }
+                // pointer position, not "hovered": the buttons on top would make the image
+                // un-hovered and the controls would flicker away under the pointer
+                let pill_zone = Rect::from_min_size(pos2(img_rect.min.x + 6.0, img_rect.min.y + 6.0), vec2(112.0, 26.0));
+                // pure geometry: egui's hover state is suppressed while another widget (text, scroll
+                // area) claims the press
+                let ptr = ui.input(|i| i.pointer.latest_pos());
+                let active = ptr.is_some_and(|p| clip.contains(p) && img_rect.union(pill_zone).union(handle).expand(2.0).contains(p)) || hresp.dragged();
+                if active {
+                    chips.push(Shape::rect_stroke(img_rect.expand(2.0), 4.0, Stroke::new(1.5, pal.accent), egui::StrokeKind::Outside));
+                    chips.push(Shape::rect_filled(handle, 3.0, pal.accent));
+                    let pill = Rect::from_min_size(pos2(img_rect.min.x + 6.0, img_rect.min.y + 6.0), vec2(112.0, 26.0));
+                    chips.push(Shape::rect_filled(pill, 8.0, with_alpha(Color32::BLACK, 175)));
+                    let pct = format!("{:.0} %", frac * 100.0);
+                    let g = ui.painter().layout_no_wrap(pct, FontId::proportional(11.5), Color32::WHITE);
+                    chips.push(Shape::galley(pos2(pill.center().x - g.size().x / 2.0, pill.center().y - g.size().y / 2.0), g, Color32::WHITE));
+                    for (k, (label, d)) in [("−", -0.1f32), ("+", 0.1)].into_iter().enumerate() {
+                        let br = Rect::from_min_size(pos2(pill.min.x + if k == 0 { 2.0 } else { pill.width() - 28.0 }, pill.min.y), vec2(26.0, 26.0));
+                        let bresp = ui.interact(br, id.with(("btn", k)), egui::Sense::click_and_drag());
+                        let col = if ptr.is_some_and(|p| br.contains(p)) { pal.accent } else { Color32::WHITE };
+                        let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(15.0), col);
+                        chips.push(Shape::galley(br.center() - g.size() / 2.0, g, col));
+                        if bresp.clicked() || own_click(ui, br, id.with(("own", k))) {
+                            img_edits.push((sp.s, sp.e, crate::visual::set_image_width(cmd, (frac0 + d).clamp(0.1, 1.0))));
+                        }
+                    }
+                    if hresp.hovered() || hresp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                    }
+                }
+                if hresp.dragged() {
+                    // symmetric: the image stays centered, so the width changes twice as fast
+                    let nf = (frac + hresp.drag_delta().x * 2.0 / wrap.max(1.0)).clamp(0.1, 1.0);
+                    ui.ctx().data_mut(|d| d.insert_temp(id, nf));
+                }
+                if hresp.drag_stopped() {
+                    ui.ctx().data_mut(|d| d.remove::<f32>(id));
+                    img_edits.push((sp.s, sp.e, crate::visual::set_image_width(cmd, frac)));
+                } else if resp.clicked() {
+                    img_goto = Some(lc);
+                }
+            }
+        }
         painter.set(chip_idx, Shape::Vec(chips));
         let _ = &spans;
         // heading numbers in the left margin
@@ -1695,8 +1800,21 @@ fn editor_core(
             out.ctrl_click_line = Some(buf.text[..char_to_byte(&buf.text, ci)].matches('\n').count() + 1);
         }
     }
+    // resize edits from the image overlays (applied after drawing, last first)
+    img_edits.sort_by(|a, b| b.0.cmp(&a.0));
+    for (a, b, t) in img_edits {
+        if b <= buf.text.len() && buf.text[a..b] != t {
+            buf.text.replace_range(a..b, &t);
+            buf.hl_cache = None;
+            out.changed = true;
+        }
+    }
+    if let Some(c) = img_goto {
+        buf.select(c, c);
+    }
     (output, galley, gpos)
 }
+
 
 /// Vim command line (":" / "/") drawn at the bottom of the editor.
 fn vim_cmdline(ui: &egui::Ui, v: &crate::vim::VimState, pal: &Palette) {
@@ -1833,4 +1951,20 @@ mod completion_tests {
         let c = comp("\\mymacro{x} and \\mym").unwrap();
         assert!(c.items.iter().any(|i| i.label == "\\mymacro"));
     }
+}
+
+/// Press and release inside `rect` – independent of which widget egui picked for the click
+/// (small buttons drawn on top of the text and inside a drag-scrollable area).
+fn own_click(ui: &egui::Ui, rect: Rect, id: egui::Id) -> bool {
+    let (pressed, released, pos) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.interact_pos()));
+    let inside = pos.is_some_and(|p| rect.contains(p));
+    if pressed {
+        ui.ctx().data_mut(|d| d.insert_temp(id, inside));
+    }
+    if released {
+        let started: bool = ui.ctx().data(|d| d.get_temp(id)).unwrap_or(false);
+        ui.ctx().data_mut(|d| d.remove::<bool>(id));
+        return started && inside;
+    }
+    false
 }
