@@ -119,6 +119,19 @@ Ein Regal für die Literatur der Arbeit – gespeichert in `references.bib`:
 - Lesestatus, Favoriten, Schlagwörter, Notizen, eingebauter PDF-Reader
 - „Zitieren“ fügt `\citep{key}` an der Cursorposition ein; lesbare Schlüssel wie `vaswani2017attention`
 
+### ✅ Plan: Aufgaben & Notizen
+
+Im Bibliothek-Tab unter „Plan“: Abgabe-Countdown, Fortschritt der Aufgaben und Wörter der Arbeit
+gegen ein Ziel. Aufgaben tippst du in natürlicher Sprache ein – „Kapitel 3 überarbeiten bis
+Freitag #methodik !“ wird zu Termin, Schlagwort und „wichtig“ (heute, morgen, Wochentage, 15.11.,
+„in 3 Tagen“, „nächste Woche“; Deutsch und Englisch). Sortiert nach Überfällig, Heute, Morgen,
+Diese Woche …; `@quelle` verlinkt die Bibliothek. `% TODO …` und `\todo{…}` aus dem Text erscheinen
+automatisch (Klick springt hin). Notizen als farbige Karten zum Anheften. Alles liegt in
+`.nedit/plan.json` und wird mit Git versioniert.
+
+**Projekteinstellungen** (Projekt-Dropdown): Name, Icon, Hauptdokumente – und „Projekt löschen“
+(der Ordner wandert in den Papierkorb).
+
 ### 🎤 Präsentation für die Masterprüfung
 
 <img src="docs/screenshots/praesentation.png" alt="Präsentations-Arbeitsbereich">

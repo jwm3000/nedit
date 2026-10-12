@@ -63,6 +63,7 @@ enum Cmd {
     Updates,
     About,
     Help,
+    Plan,
     Vim,
     Theme(Option<String>),
 }
@@ -275,6 +276,7 @@ impl App {
                 (ic::REFRESH, tr!("Nach Updates suchen" | "Check for updates").into(), Cmd::Updates),
                 (ic::GRADUATION, tr!("Über nEdit" | "About nEdit").into(), Cmd::About),
                 (ic::BOOKMARK, tr!("Hilfe & Tastenkürzel" | "Help & shortcuts").into(), Cmd::Help),
+                (ic::CHECK_CIRCLE, tr!("Plan: Aufgaben & Notizen" | "Plan: tasks & notes").into(), Cmd::Plan),
                 (ic::MAGIC, tr!("Theme: Omarchy folgen" | "Theme: follow Omarchy").into(), Cmd::Theme(None)),
                 (ic::MOON, "Theme: nEdit Ink".into(), Cmd::Theme(Some("nedit".into()))),
                 (ic::SUN, "Theme: nEdit Light".into(), Cmd::Theme(Some("nedit-light".into()))),
@@ -384,6 +386,11 @@ impl App {
                 Cmd::Updates => self.updater.check(true, ctx),
                 Cmd::About => self.about_open = true,
                 Cmd::Help => self.help_open = true,
+                Cmd::Plan => {
+                    self.tab = Tab::Shelf;
+                    self.shelf_ui.plan_view = true;
+                    self.shelf_ui.reading = None;
+                }
                 Cmd::Theme(name) => self.set_theme(name, ctx),
             },
         }

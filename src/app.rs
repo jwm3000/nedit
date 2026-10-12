@@ -156,11 +156,14 @@ pub struct ShelfUi {
     pub reading: Option<String>,
     pub confirm_delete: Option<String>,
     pub side_filter: String,
+    /// Library tab shows the plan (tasks & notes) instead of the literature
+    pub plan_view: bool,
 }
 
 pub enum Dialog {
     Delete { rel: String },
     NewProject { name: String, kind: project::TemplateKind, icon: String, user: Vec<crate::templates::UserTemplate> },
+    ProjectSettings { name: String, icon: String, thesis_main: String, slides_main: String, confirm: String },
     GitRestore { hash: String, path: String },
     /// Revert changes of these paths (files or folders, "" = everything) to the last commit.
     GitRevert { paths: Vec<String> },
@@ -240,6 +243,8 @@ pub struct App {
     pub vim: crate::vim::VimState,
     pub about_open: bool,
     pub help_open: bool,
+    pub plan: crate::plan::Plan,
+    pub plan_ui: crate::plan_ui::PlanUi,
     /// Figures for the visual mode: absolute path → (file stamp, texture).
     figs: HashMap<std::path::PathBuf, (u64, Option<egui::TextureHandle>)>,
     /// Per file: (text hash, path as written → texture id + size).
@@ -328,6 +333,8 @@ impl App {
             vim: Default::default(),
             about_open: false,
             help_open: false,
+            plan: Default::default(),
+            plan_ui: Default::default(),
             figs: Default::default(),
             fig_index: Default::default(),
             deps: None,
@@ -345,6 +352,7 @@ impl App {
     }
 
     pub fn after_project_open(&mut self, ctx: &egui::Context) {
+        crate::plan_ui::load_for(self);
         self.settings.last_project = Some(self.project.root.clone());
         self.settings.save();
         self.refresh_tree();
@@ -430,6 +438,37 @@ impl App {
         self.settings.diff_split = true;
         self.settings.save();
         self.git.open_working_diff(&root, &rel);
+    }
+
+    /// Move the current project folder to the trash and open another one (or a fresh project).
+    pub fn delete_current_project(&mut self, ctx: &egui::Context) {
+        self.save_all();
+        let root = self.project.root.clone();
+        let name = self.project.config.name.clone();
+        match trash::delete(&root) {
+            Ok(()) => {
+                let next = project::list_projects().into_iter().find(|p| *p != root);
+                let p = match next {
+                    Some(p) => Project::open(&p),
+                    None => Project::create("Masterarbeit", ""),
+                };
+                if let Ok(p) = p {
+                    self.buffers.clear();
+                    self.project = p;
+                    self.shelf = Shelf::load(&self.project.root);
+                    self.cites_rev = 0;
+                    self.after_project_open(ctx);
+                }
+                let c = self.pal.green;
+                let now = ctx.input(|i| i.time);
+                self.toast(ic::TRASH, trf!("„{name}“ ist im Papierkorb" | "“{name}” moved to the trash"), c, now);
+            }
+            Err(e) => {
+                let c = self.pal.red;
+                let now = ctx.input(|i| i.time);
+                self.toast(ic::WARN, trf!("Löschen fehlgeschlagen: {e}" | "Delete failed: {e}"), c, now);
+            }
+        }
     }
 
     /// Run the system check in the background.
@@ -1810,15 +1849,11 @@ impl App {
                             self.toast(ic::SAVE, msg, col, now);
                             ui.close();
                         }
-                        ui.menu_button(format!("{}  {}", picon, tr!("Icon ändern" | "Change icon")), |ui| {
-                            let mut icon = picon.clone();
-                            icon_grid(ui, pal, &mut icon);
-                            if icon != picon {
-                                self.project.config.icon = icon;
-                                let _ = self.project.save_config();
-                                ui.close();
-                            }
-                        });
+                        if ui.button(format!("{}  {}", ic::COG, tr!("Projekteinstellungen …" | "Project settings …"))).clicked() {
+                            let c = &self.project.config;
+                            self.dialog = Some(Dialog::ProjectSettings { name: c.name.clone(), icon: picon.clone(), thesis_main: c.thesis_main.clone(), slides_main: c.slides_main.clone(), confirm: String::new() });
+                            ui.close();
+                        }
                         if ui.button(trf!("{}  Neues Projekt …" | "{}  New project …", ic::PLUS)).clicked() {
                             self.dialog = Some(Dialog::NewProject { name: String::new(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string(), user: crate::templates::list() });
                         }
@@ -2168,6 +2203,79 @@ impl App {
                             }
                         });
                     }
+                }
+                Dialog::ProjectSettings { name, icon, thesis_main, slides_main, confirm } => {
+                    ui.set_width(460.0);
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::hover());
+                        ui.painter().rect_filled(r, 10.0, pal.accent);
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, icon.as_str(), widgets::ui_font(18.0), pal.on_accent);
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(tr!("Projekteinstellungen" | "Project settings")).font(widgets::display_font(20.0)).color(pal.bright));
+                            ui.label(egui::RichText::new(self.project.root.display().to_string()).font(widgets::mono_font(10.5)).color(pal.dim));
+                        });
+                    });
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new(tr!("NAME" | "NAME")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                    ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new(tr!("ICON" | "ICON")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                    ui.add_space(4.0);
+                    icon_grid(ui, pal, icon);
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(tr!("HAUPTDOKUMENTE" | "MAIN DOCUMENTS")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                    let tex: Vec<String> = self.flat.iter().filter(|f| f.ends_with(".tex")).cloned().collect();
+                    for (label, v, id) in [(tr!("Arbeit" | "Thesis"), &mut *thesis_main, "ps-thesis"), (tr!("Präsentation" | "Presentation"), &mut *slides_main, "ps-slides")] {
+                        ui.horizontal(|ui| {
+                            ui.add_sized(vec2(90.0, 20.0), egui::Label::new(egui::RichText::new(label).color(pal.text)));
+                            egui::ComboBox::from_id_salt(id).selected_text(v.as_str()).width(320.0).show_ui(ui, |ui| {
+                                for f in &tex {
+                                    ui.selectable_value(v, f.clone(), f);
+                                }
+                            });
+                        });
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, ic::CHECK, tr!("Speichern" | "Save"), pal, BtnKind::Primary).clicked() {
+                            let (n, i, t, s) = (name.trim().to_string(), icon.clone(), thesis_main.clone(), slides_main.clone());
+                            let ctx2 = ctx.clone();
+                            action = Some(Box::new(move |app: &mut App| {
+                                let changed_main = app.project.config.thesis_main != t || app.project.config.slides_main != s;
+                                if !n.is_empty() {
+                                    app.project.config.name = n;
+                                }
+                                app.project.config.icon = i;
+                                app.project.config.thesis_main = t;
+                                app.project.config.slides_main = s;
+                                let _ = app.project.save_config();
+                                if changed_main {
+                                    app.after_project_open(&ctx2);
+                                }
+                            }));
+                            close = true;
+                        }
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
+                            close = true;
+                        }
+                    });
+                    // danger zone
+                    ui.add_space(16.0);
+                    egui::Frame::new().fill(with_alpha(pal.red, 14)).stroke(Stroke::new(1.0, with_alpha(pal.red, 90))).corner_radius(10).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(egui::RichText::new(format!("{}  {}", ic::TRASH, tr!("Projekt löschen" | "Delete project"))).font(widgets::bold_font(13.5)).color(pal.red));
+                        let pname = self.project.root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        ui.label(egui::RichText::new(trf!("Der Ordner wandert in den Papierkorb (wiederherstellbar). Zum Bestätigen „{pname}“ eintippen:" | "The folder is moved to the trash (recoverable). Type “{pname}” to confirm:")).font(widgets::ui_font(12.0)).color(pal.subtext));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(confirm).desired_width(220.0).hint_text(pname.as_str()));
+                            let ok = *confirm == pname;
+                            if ui.add_enabled(ok, egui::Button::new(egui::RichText::new(tr!("In den Papierkorb" | "Move to trash")).color(if ok { Color32::WHITE } else { pal.dim })).fill(if ok { pal.red } else { with_alpha(pal.red, 30) })).clicked() {
+                                let ctx2 = ctx.clone();
+                                action = Some(Box::new(move |app: &mut App| app.delete_current_project(&ctx2)));
+                                close = true;
+                            }
+                        });
+                    });
                 }
                 Dialog::NewProject { name, kind, icon, user } => {
                     ui.set_width(476.0);
@@ -2631,6 +2739,15 @@ impl App {
                     b.text.insert_str(p, "\\begin{frame}{Leere Folie}\n\\end{frame}\n\n");
                 }
             }
+        }
+        if name.contains("planview") {
+            self.tab = Tab::Shelf;
+            self.shelf_ui.plan_view = true;
+            self.plan_ui_debug_input(name);
+        }
+        if name.contains("projset") && self.dialog.is_none() {
+            let c = &self.project.config;
+            self.dialog = Some(Dialog::ProjectSettings { name: c.name.clone(), icon: c.icon.clone(), thesis_main: c.thesis_main.clone(), slides_main: c.slides_main.clone(), confirm: String::new() });
         }
         if name.contains("newproj") && self.dialog.is_none() {
             self.dialog = Some(Dialog::NewProject { name: "Bachelorarbeit".into(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string(), user: crate::templates::list() });

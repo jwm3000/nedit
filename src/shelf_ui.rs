@@ -79,6 +79,31 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
         return;
     }
 
+    // ── literature | plan ──
+    let switch = |app: &mut App, ui: &mut Ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let open = app.plan.tasks.iter().filter(|t| !t.done).count();
+            if widgets::chip(ui, ic::BOOK, tr!("Literatur" | "Literature"), !app.shelf_ui.plan_view, pal.accent, &pal).clicked() {
+                app.shelf_ui.plan_view = false;
+            }
+            let plan_label = if open > 0 { format!("{}  ·  {open}", tr!("Plan" | "Plan")) } else { tr!("Plan" | "Plan").to_string() };
+            if widgets::chip(ui, ic::CHECK_CIRCLE, &plan_label, app.shelf_ui.plan_view, pal.accent, &pal).on_hover_text(tr!("Aufgaben, Notizen, Abgabe-Countdown" | "Tasks, notes, submission countdown")).clicked() {
+                app.shelf_ui.plan_view = true;
+            }
+        });
+    };
+    if app.shelf_ui.plan_view {
+        egui::CentralPanel::default().frame(Frame::new().fill(pal.base).inner_margin(Margin { left: 34, right: 28, top: 18, bottom: 10 })).show(ui, |ui| {
+            switch(app, ui);
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(tr!("Plan" | "Plan")).font(widgets::display_font(34.0)).color(pal.bright));
+            ui.add_space(6.0);
+            app.plan_view(ui, now);
+        });
+        return;
+    }
+
     // ── detail panel ──
     if let Some(key) = app.shelf_ui.selected.clone() {
         if app.shelf.papers.iter().any(|p| p.entry.key == key) {
@@ -93,7 +118,9 @@ pub fn shelf_ui(app: &mut App, ui: &mut Ui, now: f64) {
         }
     }
 
-    egui::CentralPanel::default().frame(Frame::new().fill(pal.base).inner_margin(Margin { left: 34, right: 28, top: 26, bottom: 10 })).show(ui, |ui| {
+    egui::CentralPanel::default().frame(Frame::new().fill(pal.base).inner_margin(Margin { left: 34, right: 28, top: 18, bottom: 10 })).show(ui, |ui| {
+        switch(app, ui);
+        ui.add_space(10.0);
         // ── header ──
         ui.horizontal(|ui| {
             ui.vertical(|ui| {

@@ -14,6 +14,8 @@ mod git;
 mod help;
 mod icons;
 mod pdfview;
+mod plan;
+mod plan_ui;
 mod platform;
 mod project;
 mod quickopen;
