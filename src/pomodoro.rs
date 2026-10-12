@@ -326,11 +326,13 @@ impl App {
             let (r, resp) = ui.allocate_exact_size(vec2(92.0, 104.0), Sense::click());
             let c = pos2(r.center().x, r.min.y + 42.0);
             paint_tomato(ui.painter(), c, 32.0, self.pomo.fraction_left(&self.settings), self.pomo.phase, self.pomo.running, self.pomo.waiting(), now);
-            let label = self.pomo.label(&self.settings);
-            let g = ui.painter().layout_no_wrap(label, widgets::mono_font(13.0), Color32::WHITE);
-            let pill = Rect::from_center_size(pos2(r.center().x, r.max.y - 12.0), g.size() + vec2(14.0, 6.0));
-            ui.painter().rect_filled(pill, 9.0, with_alpha(Color32::BLACK, 170));
-            ui.painter().galley(pill.center() - g.size() / 2.0, g, Color32::WHITE);
+            if self.settings.pomo_show_time {
+                let label = self.pomo.label(&self.settings);
+                let g = ui.painter().layout_no_wrap(label, widgets::mono_font(13.0), Color32::WHITE);
+                let pill = Rect::from_center_size(pos2(r.center().x, r.max.y - 12.0), g.size() + vec2(14.0, 6.0));
+                ui.painter().rect_filled(pill, 9.0, with_alpha(Color32::BLACK, 170));
+                ui.painter().galley(pill.center() - g.size() / 2.0, g, Color32::WHITE);
+            }
             let resp = resp.on_hover_text(format!("{} · {}", self.pomo.phase_name(), tr!("Klick: Start/Pause · Ziehen: verschieben · Rechtsklick: Menü" | "Click: start/pause · drag: move · right click: menu")));
             if resp.clicked() {
                 self.pomo.toggle(&self.settings);

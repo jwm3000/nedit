@@ -64,6 +64,9 @@ enum Cmd {
     About,
     Help,
     Plan,
+    PomoToggle,
+    PomoFloat,
+    PomoReset,
     Vim,
     Theme(Option<String>),
 }
@@ -277,6 +280,9 @@ impl App {
                 (ic::GRADUATION, tr!("Über nEdit" | "About nEdit").into(), Cmd::About),
                 (ic::BOOKMARK, tr!("Hilfe & Tastenkürzel" | "Help & shortcuts").into(), Cmd::Help),
                 (ic::CHECK_CIRCLE, tr!("Plan: Aufgaben & Notizen" | "Plan: tasks & notes").into(), Cmd::Plan),
+                (ic::CLOCK, if self.pomo.running { tr!("Pomodoro pausieren" | "Pause pomodoro") } else { tr!("Pomodoro starten" | "Start pomodoro") }.into(), Cmd::PomoToggle),
+                (ic::CLOCK, if self.settings.pomo_float { tr!("Pomodoro-Tomate ausblenden" | "Hide the pomodoro tomato") } else { tr!("Pomodoro-Tomate anzeigen" | "Show the pomodoro tomato") }.into(), Cmd::PomoFloat),
+                (ic::UNDO, tr!("Pomodoro zurücksetzen" | "Reset pomodoro").into(), Cmd::PomoReset),
                 (ic::MAGIC, tr!("Theme: Omarchy folgen" | "Theme: follow Omarchy").into(), Cmd::Theme(None)),
                 (ic::MOON, "Theme: nEdit Ink".into(), Cmd::Theme(Some("nedit".into()))),
                 (ic::SUN, "Theme: nEdit Light".into(), Cmd::Theme(Some("nedit-light".into()))),
@@ -386,6 +392,14 @@ impl App {
                 Cmd::Updates => self.updater.check(true, ctx),
                 Cmd::About => self.about_open = true,
                 Cmd::Help => self.help_open = true,
+                Cmd::PomoToggle => {
+                    self.pomo.toggle(&self.settings);
+                }
+                Cmd::PomoFloat => {
+                    self.settings.pomo_float = !self.settings.pomo_float;
+                    self.settings.save();
+                }
+                Cmd::PomoReset => self.pomo.reset(),
                 Cmd::Plan => {
                     self.tab = Tab::Shelf;
                     self.shelf_ui.plan_view = true;

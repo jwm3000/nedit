@@ -13,13 +13,14 @@ pub enum Page {
     Appearance,
     Editor,
     Project,
+    Pomodoro,
     System,
     General,
 }
 
 impl Page {
-    fn all() -> [Page; 5] {
-        [Page::Appearance, Page::Editor, Page::Project, Page::System, Page::General]
+    fn all() -> [Page; 6] {
+        [Page::Appearance, Page::Editor, Page::Project, Page::Pomodoro, Page::System, Page::General]
     }
     fn icon(self) -> &'static str {
         match self {
@@ -27,6 +28,7 @@ impl Page {
             Page::Editor => ic::PENCIL,
             Page::Project => ic::GRADUATION,
             Page::System => ic::CUBE,
+            Page::Pomodoro => ic::CLOCK,
             Page::General => ic::COG,
         }
     }
@@ -36,6 +38,7 @@ impl Page {
             Page::Editor => "Editor",
             Page::Project => tr!("Projekt" | "Project"),
             Page::System => tr!("TeX & Werkzeuge" | "TeX & tools"),
+            Page::Pomodoro => "Pomodoro",
             Page::General => tr!("Allgemein" | "General"),
         }
     }
@@ -45,6 +48,7 @@ impl Page {
             Page::Editor => tr!("Eingabe und Kompilieren" | "Input and compiling"),
             Page::Project => tr!("Compiler und Präsentation" | "Compiler and presentation"),
             Page::System => tr!("Was fehlt und wie installieren" | "What is missing and how to install"),
+            Page::Pomodoro => tr!("Fokus-Timer als Tomate" | "Focus timer as a tomato"),
             Page::General => tr!("Sprache, Updates, Hilfe" | "Language, updates, help"),
         }
     }
@@ -416,6 +420,7 @@ impl App {
                         Page::Editor => self.page_editor(ui, pal),
                         Page::Project => self.page_project(ui, pal),
                         Page::System => self.page_system(ui, pal, ctx),
+                        Page::Pomodoro => self.page_pomodoro(ui, pal, ctx.input(|i| i.time)),
                         Page::General => self.page_general(ui, pal, ctx),
                     }
                     ui.add_space(16.0);
@@ -636,21 +641,15 @@ impl App {
         }
     }
 
-    fn page_general(&mut self, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
-        heading(ui, pal, tr!("Sprache" | "Language"));
+    fn page_pomodoro(&mut self, ui: &mut Ui, pal: &Palette, now: f64) {
+        // the timer itself, right here
+        heading(ui, pal, tr!("Timer" | "Timer"));
         card(ui, pal, |ui| {
-            let cur = self.settings.lang_en as usize;
-            let mut pick = None;
-            row(ui, pal, tr!("Sprache der Oberfläche" | "Interface language"), tr!("Wirkt sofort" | "Applies immediately"), |ui| {
-                pick = segmented(ui, &[("DE", "Deutsch"), ("EN", "English")], cur, pal, Id::new("seg-lang"));
-            });
-            if let Some(i) = pick {
-                self.settings.lang_en = i == 1;
-                crate::i18n::set_english(self.settings.lang_en);
-                self.settings.save();
-            }
+            ui.add_space(6.0);
+            self.pomodoro_card(ui, pal, now);
+            ui.add_space(6.0);
         });
-        heading(ui, pal, "Pomodoro");
+        heading(ui, pal, tr!("Ablauf" | "Timing"));
         card(ui, pal, |ui| {
             let mut v = [self.settings.pomo_work as f32, self.settings.pomo_short as f32, self.settings.pomo_long as f32, self.settings.pomo_rounds as f32];
             let mut ch = false;
@@ -700,6 +699,30 @@ impl App {
                     self.settings.save();
                 }
             });
+            divider(ui, pal);
+            let mut st = self.settings.pomo_show_time;
+            row(ui, pal, tr!("Zeit anzeigen" | "Show the time"), tr!("Restzeit unter der Tomate und in der Statusleiste" | "Remaining time below the tomato and in the status bar"), |ui| {
+                if toggle(ui, &mut st, pal).changed() {
+                    self.settings.pomo_show_time = st;
+                    self.settings.save();
+                }
+            });
+        });
+    }
+
+    fn page_general(&mut self, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
+        heading(ui, pal, tr!("Sprache" | "Language"));
+        card(ui, pal, |ui| {
+            let cur = self.settings.lang_en as usize;
+            let mut pick = None;
+            row(ui, pal, tr!("Sprache der Oberfläche" | "Interface language"), tr!("Wirkt sofort" | "Applies immediately"), |ui| {
+                pick = segmented(ui, &[("DE", "Deutsch"), ("EN", "English")], cur, pal, Id::new("seg-lang"));
+            });
+            if let Some(i) = pick {
+                self.settings.lang_en = i == 1;
+                crate::i18n::set_english(self.settings.lang_en);
+                self.settings.save();
+            }
         });
         heading(ui, pal, "Updates");
         card(ui, pal, |ui| {

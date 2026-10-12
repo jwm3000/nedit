@@ -51,12 +51,14 @@ pub struct Settings {
     pub pomo_sound: bool,
     /// show the floating tomato
     pub pomo_float: bool,
+    /// show the remaining time (floating tomato, status bar)
+    pub pomo_show_time: bool,
     pub pomo_pos: Option<[f32; 2]>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_pos: None }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_show_time: true, pomo_pos: None }
     }
 }
 
@@ -2060,7 +2062,7 @@ impl App {
                         ui.label(small(format!("{}  {}", ic::BRUSH, self.pal.name), pal.dim));
                         ui.add_space(10.0);
                         // running pomodoro → open the plan
-                        if self.pomo.running || self.pomo.waiting() {
+                        if (self.pomo.running || self.pomo.waiting()) && self.settings.pomo_show_time {
                             let txt = format!("{}  {}  {}", ic::CLOCK, self.pomo.phase_name(), self.pomo.label(&self.settings));
                             let r = ui.add(egui::Label::new(small(txt, pal.red)).sense(egui::Sense::click())).on_hover_text(tr!("Pomodoro – Klick öffnet den Plan" | "Pomodoro – click opens the plan"));
                             if r.clicked() {
@@ -2822,7 +2824,7 @@ impl App {
             self.settings.slides_visual = true;
         }
         if name.contains("settings") {
-            let page = if name.contains("set-sys") { crate::settings_ui::Page::System } else if name.contains("set-ed") { crate::settings_ui::Page::Editor } else if name.contains("set-gen") { crate::settings_ui::Page::General } else if name.contains("set-proj") { crate::settings_ui::Page::Project } else { crate::settings_ui::Page::Appearance };
+            let page = if name.contains("set-sys") { crate::settings_ui::Page::System } else if name.contains("set-ed") { crate::settings_ui::Page::Editor } else if name.contains("set-gen") { crate::settings_ui::Page::General } else if name.contains("set-pomo") { crate::settings_ui::Page::Pomodoro } else if name.contains("set-proj") { crate::settings_ui::Page::Project } else { crate::settings_ui::Page::Appearance };
             if !self.settings_open {
                 self.open_settings(Some(page), ctx);
             }
