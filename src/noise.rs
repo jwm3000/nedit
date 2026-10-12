@@ -427,7 +427,13 @@ impl App {
         let playing = self.noise.playing();
         let (r, resp) = ui.allocate_exact_size(vec2(52.0, 30.0), Sense::click());
         let hover = resp.hovered();
-        let fill = if playing { with_alpha(pal.accent, if hover { 60 } else { 40 }) } else if hover { pal.surface } else { with_alpha(pal.surface, 160) };
+        // while playing the button glows softly (one slow breath every ~3 s)
+        let glow = if playing { 0.5 + 0.5 * (now * std::f64::consts::TAU / 3.2).sin() as f32 } else { 0.0 };
+        if playing {
+            ui.painter().rect_stroke(r.expand(1.5), 16.5, Stroke::new(2.0, with_alpha(pal.accent, (18.0 + 40.0 * glow) as u8)), egui::StrokeKind::Outside);
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(40));
+        }
+        let fill = if playing { with_alpha(pal.accent, (if hover { 55.0 } else { 32.0 } + 22.0 * glow) as u8) } else if hover { pal.surface } else { with_alpha(pal.surface, 160) };
         ui.painter().rect(r, 15.0, fill, Stroke::new(1.0, with_alpha(if playing { pal.accent } else { pal.border }, 140)), egui::StrokeKind::Inside);
         let col = if playing { pal.accent } else { pal.subtext };
         // sound icon + play/pause, no animation
