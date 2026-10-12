@@ -38,13 +38,15 @@ pub struct Project {
 /// New projects: official TU Graz thesis template (KOMA, by Karl Voit et al., CC BY-SA 3.0)
 /// and TU Graz Beamer theme 2018 – filled with placeholder content.
 /// Which files a new project starts with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum TemplateKind {
     /// Official TU Graz thesis template + TU Graz beamer theme
     #[default]
     TuGraz,
     /// A lean KOMA-Script report with one chapter and plain beamer slides
     Blank,
+    /// A saved user template (folder id in the templates directory)
+    User(String),
 }
 
 /// Icons to choose from for a project.
@@ -178,6 +180,20 @@ impl Project {
             return Project::open(&root);
         }
         std::fs::create_dir_all(root.join(".nedit"))?;
+        if let TemplateKind::User(id) = &kind {
+            let t = crate::templates::list().into_iter().find(|t| &t.id == id).ok_or_else(|| std::io::Error::other("template not found"))?;
+            let (thesis_main, slides_main) = crate::templates::instantiate(&t, &root)?;
+            if !root.join(".gitignore").exists() {
+                std::fs::write(root.join(".gitignore"), ".nedit/build/\n")?;
+            }
+            let mut config = ProjectConfig { name: name.to_string(), icon: icon.to_string(), thesis_main, ..Default::default() };
+            if let Some(s) = slides_main {
+                config.slides_main = s;
+            }
+            let p = Project { root, config };
+            p.save_config()?;
+            return Ok(p);
+        }
         let blank: Vec<(&str, String)> = if kind == TemplateKind::Blank { blank_files(crate::i18n::en()) } else { vec![] };
         let files: Vec<(&str, &[u8])> = if kind == TemplateKind::Blank { blank.iter().map(|(r, c)| (*r, c.as_bytes())).collect() } else { TEMPLATE.to_vec() };
         for (rel, content) in files {
@@ -431,5 +447,29 @@ mod tests {
             assert!(r.pdf.is_some(), "{main}: no PDF");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore = "needs TeX Live with biber; set PROBE_ZIP to an Overleaf-style ZIP"]
+    fn user_template_project_compiles() {
+        let base = std::env::temp_dir().join(format!("nedit-utpl-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        // SAFETY: test-only, single-threaded use of the env vars
+        unsafe {
+            std::env::set_var("NEDIT_PROJECTS", base.join("projects"));
+            std::env::set_var("NEDIT_TEMPLATES", base.join("templates"));
+        }
+        let zip = std::env::var("PROBE_ZIP").unwrap();
+        let t = crate::templates::import_zip(std::path::Path::new(&zip), "Overleaf", crate::icons::BOOK).unwrap();
+        let p = Project::create_with("Aus Vorlage", "", TemplateKind::User(t.id.clone()), crate::icons::BOOK).unwrap();
+        assert_eq!(p.config.thesis_main, t.thesis_main);
+        for (main, out) in [(p.config.thesis_main.clone(), ".nedit/build/arbeit"), (p.config.slides_main.clone(), ".nedit/build/praesentation")] {
+            let spec = crate::compile::CompileSpec { root: p.root.clone(), main: main.clone(), outdir: out.into(), engine: "pdflatex".into() };
+            let r = crate::compile::run_for_test(&spec);
+            let errors: Vec<_> = r.issues.iter().filter(|i| i.level == crate::compile::Level::Error).collect();
+            assert!(errors.is_empty(), "{main}: {errors:?}");
+            assert!(r.pdf.is_some(), "{main}: no PDF");
+        }
+        let _ = std::fs::remove_dir_all(base);
     }
 }

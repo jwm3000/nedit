@@ -23,6 +23,7 @@ mod slide_ui;
 mod slides;
 mod smart;
 mod shelf_ui;
+mod templates;
 mod theme;
 mod updater;
 mod vim;

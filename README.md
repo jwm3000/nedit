@@ -188,7 +188,13 @@ Ein neues Projekt startet mit den **offiziellen TU-Graz-Vorlagen**, mit Platzhal
 befüllt und sofort kompilierbar:
 
 | Masterarbeit | Präsentation (Masterprüfung) |
-| --- | --- |
+| **Eigene Vorlagen:** Unter „Neues Projekt → Vorlage importieren“ lässt sich ein ZIP (z. B. von
+Overleaf: *Menü → Download → Source*) oder ein Ordner als Vorlage speichern; die Projektauswahl
+bietet zusätzlich „Als Vorlage speichern“. nEdit erkennt Hauptdokument und Beamer-Präsentation
+automatisch, lässt Build-Dateien weg und legt die Vorlagen im Datenordner ab
+(`~/.local/share/nedit/templates`). Beim Anlegen wählst du außerdem ein Projekt-Icon.
+
+--- | --- |
 | KOMA-Script-Vorlage für Abschlussarbeiten an der TU Graz (Titelblatt, eidesstattliche Erklärung, Abstract/Kurzfassung, biblatex/APA, Ludografie) | TU-Graz-Beamer-Theme 2018 (Titelfolie, Gliederung, Listen, Bilder, Blöcke, Spalten) |
 | `main.tex`, `template/`, `content/*.tex`, `figures/` | `praesentation/folien.tex`, `beamerthemetugraz2018.sty`, `theme/` |
 

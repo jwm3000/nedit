@@ -160,7 +160,7 @@ pub struct ShelfUi {
 
 pub enum Dialog {
     Delete { rel: String },
-    NewProject { name: String, kind: project::TemplateKind, icon: String },
+    NewProject { name: String, kind: project::TemplateKind, icon: String, user: Vec<crate::templates::UserTemplate> },
     GitRestore { hash: String, path: String },
     /// Revert changes of these paths (files or folders, "" = everything) to the last commit.
     GitRevert { paths: Vec<String> },
@@ -1799,6 +1799,17 @@ impl App {
                             }
                         }
                         ui.separator();
+                        if ui.button(format!("{}  {}", ic::SAVE, tr!("Als Vorlage speichern" | "Save as template"))).on_hover_text(tr!("Das aktuelle Projekt (ohne Build-Dateien) als Vorlage für neue Projekte speichern" | "Save the current project (without build files) as a template for new projects")).clicked() {
+                            self.save_all();
+                            let name = self.project.config.name.clone();
+                            let res = crate::templates::save_project(&self.project.root, &name, &picon);
+                            let (msg, col) = match res {
+                                Ok(t) => (trf!("Vorlage „{}“ gespeichert – bei „Neues Projekt“ wählbar" | "Template “{}” saved – available under “New project”", t.name), pal.green),
+                                Err(e) => (e.to_string(), pal.red),
+                            };
+                            self.toast(ic::SAVE, msg, col, now);
+                            ui.close();
+                        }
                         ui.menu_button(format!("{}  {}", picon, tr!("Icon ändern" | "Change icon")), |ui| {
                             let mut icon = picon.clone();
                             icon_grid(ui, pal, &mut icon);
@@ -1809,7 +1820,7 @@ impl App {
                             }
                         });
                         if ui.button(trf!("{}  Neues Projekt …" | "{}  New project …", ic::PLUS)).clicked() {
-                            self.dialog = Some(Dialog::NewProject { name: String::new(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string() });
+                            self.dialog = Some(Dialog::NewProject { name: String::new(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string(), user: crate::templates::list() });
                         }
                         if ui.button(trf!("{}  Ordner öffnen" | "{}  Open folder", ic::FOLDER_OPEN)).clicked() {
                             crate::platform::open_external(&self.project.root);
@@ -1994,6 +2005,7 @@ impl App {
         let Some(dialog) = &mut self.dialog else { return };
         let mut close = false;
         let mut action: Option<Box<dyn FnOnce(&mut App)>> = None;
+        let mut template_error: Option<String> = ctx.data(|d| d.get_temp(egui::Id::new("tpl-error")));
         let modal = egui::Modal::new(egui::Id::new("dialog")).backdrop_color(with_alpha(Color32::BLACK, 120)).show(ctx, |ui| {
             ui.set_width(380.0);
             match dialog {
@@ -2157,34 +2169,108 @@ impl App {
                         });
                     }
                 }
-                Dialog::NewProject { name, kind, icon } => {
-                    ui.set_width(460.0);
+                Dialog::NewProject { name, kind, icon, user } => {
+                    ui.set_width(476.0);
                     ui.label(egui::RichText::new(tr!("Neues Projekt" | "New project")).font(widgets::display_font(20.0)).color(pal.bright));
                     ui.add_space(8.0);
                     let r = ui.add(egui::TextEdit::singleline(name).hint_text(tr!("Projektname" | "Project name")).desired_width(f32::INFINITY));
-                    r.request_focus();
+                    if !ctx.memory(|m| m.focused().is_some()) {
+                        r.request_focus();
+                    }
                     ui.add_space(12.0);
-                    ui.label(egui::RichText::new(tr!("VORLAGE" | "TEMPLATE")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
-                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        for (k, ico, title, desc) in [
-                            (project::TemplateKind::TuGraz, ic::UNIVERSITY, tr!("TU Graz – Masterarbeit" | "TU Graz – Master's thesis"), tr!("Offizielle Vorlage: Titelblatt, Erklärung, Abstract, biblatex – dazu das TU-Graz-Beamer-Theme" | "Official template: title page, affidavit, abstract, biblatex – plus the TU Graz beamer theme")),
-                            (project::TemplateKind::Blank, ic::FILE_TEXT, tr!("Leer" | "Blank"), tr!("Schlanke Arbeit mit einem Kapitel, Literaturverzeichnis und einfachen Folien" | "Lean thesis with one chapter, bibliography and plain slides")),
-                        ] {
-                            let sel = *kind == k;
-                            let (r, resp) = ui.allocate_exact_size(vec2(224.0, 104.0), egui::Sense::click());
-                            let hov = resp.hovered();
-                            ui.painter().rect_filled(r, 10.0, if sel { with_alpha(pal.accent, 30) } else if hov { with_alpha(pal.text, 10) } else { mix(pal.surface, pal.base, 0.4) });
-                            ui.painter().rect_stroke(r, 10.0, Stroke::new(if sel { 2.0 } else { 1.0 }, if sel { pal.accent } else { with_alpha(pal.border, 150) }), egui::StrokeKind::Inside);
-                            ui.painter().text(r.min + vec2(16.0, 22.0), Align2::LEFT_CENTER, ico, widgets::ui_font(16.0), if sel { pal.accent } else { pal.subtext });
-                            ui.painter().text(r.min + vec2(40.0, 22.0), Align2::LEFT_CENTER, title, widgets::bold_font(13.5), pal.bright);
-                            let g = ui.painter().layout(desc.to_string(), widgets::ui_font(11.5), pal.dim, r.width() - 28.0);
-                            ui.painter().galley(r.min + vec2(14.0, 40.0), g, pal.dim);
-                            if resp.clicked() {
-                                *kind = k;
-                            }
+                        ui.label(egui::RichText::new(tr!("VORLAGE" | "TEMPLATE")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let imp = ui.add(egui::Button::new(egui::RichText::new(format!("{}  {}", ic::DOWNLOAD, tr!("Vorlage importieren" | "Import template"))).font(widgets::ui_font(12.0)).color(pal.accent)).frame(false));
+                            egui::Popup::menu(&imp).show(|ui| {
+                                ui.set_min_width(250.0);
+                                let mut picked: Option<(bool, std::path::PathBuf)> = None;
+                                if ui.button(format!("{}  {}", ic::CUBE, tr!("ZIP-Datei … (z. B. Overleaf: Menü → Download → Source)" | "ZIP file … (e.g. Overleaf: Menu → Download → Source)"))).clicked() {
+                                    picked = rfd::FileDialog::new().add_filter("ZIP", &["zip"]).set_title(tr!("Vorlage als ZIP importieren" | "Import template from ZIP")).pick_file().map(|f| (true, f));
+                                    ui.close();
+                                }
+                                if ui.button(format!("{}  {}", ic::FOLDER_OPEN, tr!("Ordner …" | "Folder …"))).clicked() {
+                                    picked = rfd::FileDialog::new().set_title(tr!("Vorlagen-Ordner wählen" | "Choose a template folder")).pick_folder().map(|f| (false, f));
+                                    ui.close();
+                                }
+                                if let Some((zip, path)) = picked {
+                                    let tname = path.file_stem().map(|s| s.to_string_lossy().replace(['_', '-'], " ")).unwrap_or_else(|| "Vorlage".into());
+                                    let res = if zip { crate::templates::import_zip(&path, &tname, ic::FILE_TEXT) } else { crate::templates::import_dir(&path, &tname, ic::FILE_TEXT) };
+                                    match res {
+                                        Ok(t) => {
+                                            *kind = project::TemplateKind::User(t.id.clone());
+                                            *user = crate::templates::list();
+                                        }
+                                        Err(e) => template_error = Some(e.to_string()),
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(4.0);
+                    // built-in templates + saved ones, two per row
+                    let mut cards: Vec<(project::TemplateKind, String, String, String, Option<String>)> = vec![
+                        (project::TemplateKind::TuGraz, ic::UNIVERSITY.into(), tr!("TU Graz – Masterarbeit" | "TU Graz – Master's thesis").into(), tr!("Offizielle Vorlage: Titelblatt, Erklärung, Abstract, biblatex – dazu das TU-Graz-Beamer-Theme" | "Official template: title page, affidavit, abstract, biblatex – plus the TU Graz beamer theme").into(), None),
+                        (project::TemplateKind::Blank, ic::FILE_TEXT.into(), tr!("Leer" | "Blank").into(), tr!("Schlanke Arbeit mit einem Kapitel, Literaturverzeichnis und einfachen Folien" | "Lean thesis with one chapter, bibliography and plain slides").into(), None),
+                    ];
+                    for t in user.iter() {
+                        let desc = match &t.slides_main {
+                            Some(sl) => format!("{} · {} + {}", t.source, t.thesis_main, sl),
+                            None => format!("{} · {}", t.source, t.thesis_main),
+                        };
+                        cards.push((project::TemplateKind::User(t.id.clone()), t.icon.clone(), t.name.clone(), desc, Some(t.id.clone())));
+                    }
+                    let mut delete: Option<String> = None;
+                    egui::ScrollArea::vertical().max_height(250.0).auto_shrink([false, true]).show(ui, |ui| {
+                        for row in cards.chunks(2) {
+                            ui.horizontal(|ui| {
+                                for (k, ico, title, desc, del_id) in row {
+                                    let sel = *kind == *k;
+                                    let (r, resp) = ui.allocate_exact_size(vec2(230.0, 104.0), egui::Sense::click());
+                                    let hov = resp.hovered();
+                                    ui.painter().rect_filled(r, 10.0, if sel { with_alpha(pal.accent, 30) } else if hov { with_alpha(pal.text, 10) } else { mix(pal.surface, pal.base, 0.4) });
+                                    ui.painter().rect_stroke(r, 10.0, Stroke::new(if sel { 2.0 } else { 1.0 }, if sel { pal.accent } else { with_alpha(pal.border, 150) }), egui::StrokeKind::Inside);
+                                    ui.painter().text(r.min + vec2(16.0, 22.0), Align2::LEFT_CENTER, ico, widgets::ui_font(16.0), if sel { pal.accent } else { pal.subtext });
+                                    let tg = ui.painter().layout_no_wrap(title.clone(), widgets::bold_font(13.5), pal.bright);
+                                    ui.painter().with_clip_rect(Rect::from_min_max(r.min, pos2(r.max.x - 34.0, r.max.y))).galley(pos2(r.min.x + 40.0, r.min.y + 22.0 - tg.size().y / 2.0), tg, pal.bright);
+                                    let g = ui.painter().layout(desc.clone(), widgets::ui_font(11.5), pal.dim, r.width() - 28.0);
+                                    ui.painter().with_clip_rect(r.shrink(2.0)).galley(r.min + vec2(14.0, 40.0), g, pal.dim);
+                                    if resp.clicked() {
+                                        *kind = k.clone();
+                                    }
+                                    if let Some(id) = del_id {
+                                        // delete: click twice (the first click arms it)
+                                        let tr_ = Rect::from_center_size(pos2(r.max.x - 18.0, r.min.y + 20.0), vec2(24.0, 24.0));
+                                        let armed_id = egui::Id::new(("tpl-del-armed", id.as_str()));
+                                        let armed: bool = ctx.data(|d| d.get_temp(armed_id)).unwrap_or(false);
+                                        if hov || armed || ui.rect_contains_pointer(tr_) {
+                                            let dresp = ui.interact(tr_, egui::Id::new(("tpl-del", id.as_str())), egui::Sense::click()).on_hover_text(if armed { tr!("Nochmal klicken zum Löschen" | "Click again to delete") } else { tr!("Vorlage löschen" | "Delete template") });
+                                            ui.painter().rect_filled(tr_, 6.0, if armed { pal.red } else if dresp.hovered() { with_alpha(pal.red, 50) } else { with_alpha(pal.text, 12) });
+                                            ui.painter().text(tr_.center(), Align2::CENTER_CENTER, ic::TRASH, widgets::ui_font(11.0), if armed { Color32::WHITE } else { pal.subtext });
+                                            if dresp.clicked() {
+                                                if armed {
+                                                    delete = Some(id.clone());
+                                                } else {
+                                                    ctx.data_mut(|d| d.insert_temp(armed_id, true));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                            ui.add_space(6.0);
                         }
                     });
+                    if let Some(id) = delete {
+                        let _ = crate::templates::delete(&id);
+                        if *kind == project::TemplateKind::User(id) {
+                            *kind = project::TemplateKind::TuGraz;
+                        }
+                        *user = crate::templates::list();
+                    }
+                    if let Some(e) = &template_error {
+                        ui.label(egui::RichText::new(format!("{}  {e}", ic::WARN)).font(widgets::ui_font(12.0)).color(pal.red));
+                    }
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new(tr!("ICON" | "ICON")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
                     ui.add_space(4.0);
@@ -2194,7 +2280,7 @@ impl App {
                     ui.horizontal(|ui| {
                         if (widgets::button(ui, ic::PLUS, tr!("Erstellen" | "Create"), pal, BtnKind::Primary).clicked() || enter) && !name.trim().is_empty() {
                             let name = name.trim().to_string();
-                            let kind_v = *kind;
+                            let kind_v = kind.clone();
                             let icon_v = icon.clone();
                             let ctx2 = ctx.clone();
                             action = Some(Box::new(move |app: &mut App| {
@@ -2215,6 +2301,12 @@ impl App {
                 }
             }
         });
+        match &template_error {
+            Some(e) if !close => ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new("tpl-error"), e.clone());
+            }),
+            _ => ctx.data_mut(|d| d.remove::<String>(egui::Id::new("tpl-error"))),
+        }
         if modal.should_close() {
             close = true;
         }
@@ -2541,7 +2633,7 @@ impl App {
             }
         }
         if name.contains("newproj") && self.dialog.is_none() {
-            self.dialog = Some(Dialog::NewProject { name: "Bachelorarbeit".into(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string() });
+            self.dialog = Some(Dialog::NewProject { name: "Bachelorarbeit".into(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string(), user: crate::templates::list() });
         }
         if name.contains("svis") {
             self.settings.slides_visual = true;
