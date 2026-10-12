@@ -163,20 +163,86 @@ pub fn paint_tomato(p: &egui::Painter, c: Pos2, r: f32, left: f32, phase: Phase,
 
 // ───────────────────────────── chime ─────────────────────────────
 
-/// A short bell chime as 16-bit mono WAV (three partials with exponential decay).
-fn chime_wav() -> Vec<u8> {
-    let rate = 44_100u32;
-    let dur = 1.6f32;
-    let n = (rate as f32 * dur) as usize;
-    let notes = [(1318.5f32, 0.0f32), (1568.0, 0.12), (2093.0, 0.24)]; // E6 G6 C7
-    let mut samples = vec![0f32; n];
-    for (f, start) in notes {
-        let s0 = (start * rate as f32) as usize;
-        for (i, out) in samples.iter_mut().enumerate().skip(s0) {
-            let t = (i - s0) as f32 / rate as f32;
-            let env = (-t * 3.2).exp() * (1.0 - (-t * 400.0).exp());
-            *out += env * ((std::f32::consts::TAU * f * t).sin() * 0.6 + (std::f32::consts::TAU * f * 2.0 * t).sin() * 0.15);
+/// Which chime to play.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Chime {
+    /// end of a phase: a short bell (E6 G6 C7)
+    Short,
+    /// the long break starts: a music-box arpeggio over a warm chord with an echo tail
+    Long,
+}
+
+/// A bell tone with a few partials and exponential decay, added into `out`.
+fn bell(out: &mut [f32], rate: f32, f: f32, start: f32, decay: f32, amp: f32) {
+    let s0 = (start * rate) as usize;
+    // partials of a soft bell / celesta: (ratio, level, extra decay)
+    let partials = [(1.0f32, 1.0f32, 1.0f32), (2.0, 0.28, 1.6), (3.0, 0.1, 2.4), (4.16, 0.05, 3.2)];
+    for (i, o) in out.iter_mut().enumerate().skip(s0) {
+        let t = (i - s0) as f32 / rate;
+        let attack = 1.0 - (-t * 300.0).exp();
+        let mut v = 0.0;
+        for (r, l, d) in partials {
+            v += l * (std::f32::consts::TAU * f * r * t).sin() * (-t * decay * d).exp();
         }
+        *o += amp * attack * v;
+    }
+}
+
+/// A soft pad note (slow attack, slow release) for the chord under the long chime.
+fn pad(out: &mut [f32], rate: f32, f: f32, start: f32, len: f32, amp: f32) {
+    let s0 = (start * rate) as usize;
+    for (i, o) in out.iter_mut().enumerate().skip(s0) {
+        let t = (i - s0) as f32 / rate;
+        let env = (t / 0.35).min(1.0) * if t < len { 1.0 } else { (-(t - len) * 2.5).exp() };
+        // slight detune for warmth
+        let v = (std::f32::consts::TAU * f * t).sin() + 0.6 * (std::f32::consts::TAU * f * 1.003 * t).sin() + 0.15 * (std::f32::consts::TAU * f * 2.0 * t).sin();
+        *o += amp * env * v;
+    }
+}
+
+fn synth(kind: Chime, rate: u32) -> Vec<f32> {
+    let r = rate as f32;
+    match kind {
+        Chime::Short => {
+            let mut s = vec![0f32; (r * 1.6) as usize];
+            for (f, start) in [(1318.5f32, 0.0f32), (1568.0, 0.12), (2093.0, 0.24)] {
+                bell(&mut s, r, f, start, 3.2, 0.6);
+            }
+            s
+        }
+        Chime::Long => {
+            let mut s = vec![0f32; (r * 4.2) as usize];
+            // warm C major chord swelling underneath
+            for f in [261.63f32, 329.63, 392.0, 523.25] {
+                pad(&mut s, r, f, 0.0, 1.4, 0.07);
+            }
+            // music-box arpeggio up and a final high sparkle: C6 E6 G6 C7 – E7 G7 C8 (soft)
+            let notes = [(1046.5f32, 0.0f32, 0.55f32), (1318.5, 0.16, 0.5), (1568.0, 0.32, 0.5), (2093.0, 0.48, 0.55), (2637.0, 0.78, 0.25), (3136.0, 0.9, 0.2), (4186.0, 1.02, 0.14)];
+            for (f, start, amp) in notes {
+                bell(&mut s, r, f, start, 1.8, amp);
+            }
+            // echo tail: two soft feedback delays for a little space
+            for (delay, gain) in [(0.23f32, 0.32f32), (0.37, 0.22)] {
+                let d = (delay * r) as usize;
+                for i in d..s.len() {
+                    s[i] += s[i - d] * gain;
+                }
+            }
+            s
+        }
+    }
+}
+
+/// The chime as 16-bit mono WAV.
+fn chime_wav(kind: Chime) -> Vec<u8> {
+    let rate = 44_100u32;
+    let mut samples = synth(kind, rate);
+    // normalize and fade out the last 150 ms (no click at the end)
+    let peak = samples.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-6);
+    let fade = (0.15 * rate as f32) as usize;
+    let n = samples.len();
+    for (i, v) in samples.iter_mut().enumerate() {
+        *v = *v / peak * 0.5 * ((n - i) as f32 / fade as f32).min(1.0);
     }
     let mut wav = Vec::with_capacity(44 + n * 2);
     let data_len = (n * 2) as u32;
@@ -192,18 +258,22 @@ fn chime_wav() -> Vec<u8> {
     wav.extend_from_slice(&16u16.to_le_bytes());
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_len.to_le_bytes());
-    for s in samples {
-        let v = (s * 0.32).clamp(-1.0, 1.0);
-        wav.extend_from_slice(&((v * i16::MAX as f32) as i16).to_le_bytes());
+    for v in samples {
+        wav.extend_from_slice(&((v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes());
     }
     wav
 }
 
-/// Play the chime in the background with the system's audio tools.
-pub fn play_chime() {
-    std::thread::spawn(|| {
-        let f = std::env::temp_dir().join("nedit-chime.wav");
-        if !f.exists() && std::fs::write(&f, chime_wav()).is_err() {
+/// Play a chime in the background with the system's audio tools.
+pub fn play_chime(kind: Chime) {
+    std::thread::spawn(move || {
+        // versioned name, so a changed sound replaces the cached file
+        let name = match kind {
+            Chime::Short => "nedit-chime-2.wav",
+            Chime::Long => "nedit-chime-long-2.wav",
+        };
+        let f = std::env::temp_dir().join(name);
+        if !f.exists() && std::fs::write(&f, chime_wav(kind)).is_err() {
             return;
         }
         #[cfg(target_os = "macos")]
@@ -238,9 +308,6 @@ impl App {
             return;
         }
         // phase finished
-        if self.settings.pomo_sound {
-            play_chime();
-        }
         let s = self.settings.clone();
         let (next, run, msg) = match self.pomo.phase {
             Phase::Work => {
@@ -257,6 +324,9 @@ impl App {
             }
             _ => (Phase::Work, false, tr!("Pause vorbei – Tomate antippen für die nächste Runde" | "Break over – tap the tomato for the next round")),
         };
+        if s.pomo_sound {
+            play_chime(if next == Phase::Long { Chime::Long } else { Chime::Short });
+        }
         self.pomo.start_phase(next, &s, run);
         self.pomo.finished_at = (!run).then(Instant::now);
         let c = phase_color(next);
@@ -316,14 +386,26 @@ impl App {
         if !self.settings.pomo_float {
             return;
         }
+        // position = distance of the tomato's top left from the bottom right window corner,
+        // so it stays in its corner when the window size changes (default: bottom right)
         let screen = ctx.content_rect();
-        let default = self.settings.pomo_pos.map(|p| pos2(p[0], p[1])).unwrap_or(pos2(screen.max.x - 120.0, screen.max.y - 150.0));
-        let mut area = egui::Area::new(Id::new("pomo-float")).order(egui::Order::Foreground).movable(true).constrain(true).default_pos(default);
-        if self.settings.pomo_pos.is_none() {
-            area = area.current_pos(default);
-        }
+        let size = vec2(92.0, 104.0);
+        let off = self.settings.pomo_corner.map(|p| vec2(p[0], p[1])).unwrap_or(vec2(124.0, 150.0));
+        let max = (screen.max - size).max(screen.min);
+        let pos = (screen.max - off).clamp(screen.min, max);
+        let area = egui::Area::new(Id::new("pomo-float")).order(egui::Order::Foreground).fixed_pos(pos);
         let resp = area.show(ctx, |ui| {
-            let (r, resp) = ui.allocate_exact_size(vec2(92.0, 104.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+            if resp.dragged() {
+                let p = (pos + resp.drag_delta()).clamp(screen.min, max);
+                self.settings.pomo_corner = Some([screen.max.x - p.x, screen.max.y - p.y]);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            } else if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+            if resp.drag_stopped() {
+                self.settings.save();
+            }
             let c = pos2(r.center().x, r.min.y + 42.0);
             paint_tomato(ui.painter(), c, 32.0, self.pomo.fraction_left(&self.settings), self.pomo.phase, self.pomo.running, self.pomo.waiting(), now);
             if self.settings.pomo_show_time {
@@ -358,12 +440,7 @@ impl App {
                 }
             });
         });
-        // remember where it was dropped
-        if resp.response.drag_stopped() {
-            let p = resp.response.rect.min;
-            self.settings.pomo_pos = Some([p.x, p.y]);
-            self.settings.save();
-        }
+        let _ = resp;
         let _ = pal;
     }
 }
@@ -374,11 +451,13 @@ mod tests {
 
     #[test]
     fn chime_is_valid_wav() {
-        let w = chime_wav();
-        assert_eq!(&w[0..4], b"RIFF");
-        assert_eq!(&w[8..12], b"WAVE");
-        let data = u32::from_le_bytes([w[40], w[41], w[42], w[43]]) as usize;
-        assert_eq!(w.len(), 44 + data);
+        for k in [Chime::Short, Chime::Long] {
+            let w = chime_wav(k);
+            assert_eq!(&w[0..4], b"RIFF");
+            assert_eq!(&w[8..12], b"WAVE");
+            let data = u32::from_le_bytes([w[40], w[41], w[42], w[43]]) as usize;
+            assert_eq!(w.len(), 44 + data);
+        }
     }
 
     #[test]

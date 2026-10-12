@@ -15,6 +15,8 @@ pub struct PlanUi {
     tag_filter: Option<String>,
     show_source: bool,
     editing: Option<(u64, String)>,
+    /// the edit field had focus at least once (losing it afterwards ends editing)
+    edit_started: bool,
     deadline_edit: Option<String>,
     goal_edit: Option<String>,
     page_goal_edit: Option<String>,
@@ -326,7 +328,7 @@ impl App {
                             .plan
                             .tasks
                             .iter()
-                            .filter(|t| (!t.done || !self.plan.hide_done) && task_group(t, today) == g)
+                            .filter(|t| !t.done && task_group(t, today) == g)
                             .filter(|t| self.plan_ui.tag_filter.as_ref().is_none_or(|f| t.tags.contains(f)))
                             .cloned()
                             .collect();
@@ -334,9 +336,8 @@ impl App {
                             continue;
                         }
                         any = true;
-                        // open first, finished ones (struck through) at the end of their group
-                        items.sort_by(|a, b| a.done.cmp(&b.done).then(b.important.cmp(&a.important)).then(a.due.cmp(&b.due)).then(a.id.cmp(&b.id)));
-                        let open_n = items.iter().filter(|t| !t.done).count();
+                        items.sort_by(|a, b| b.important.cmp(&a.important).then(a.due.cmp(&b.due)).then(a.id.cmp(&b.id)));
+                        let open_n = items.len();
                         ui.horizontal(|ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                             ui.painter().circle_filled(r.center(), 4.0, col);
@@ -347,6 +348,29 @@ impl App {
                             self.task_row(ui, &pal, &t, today, col_w, &mut toggle, &mut delete_task, &mut open_paper, &mut changed);
                         }
                         ui.add_space(10.0);
+                    }
+                    // finished tasks: struck through, their own group at the end
+                    if !self.plan.hide_done {
+                        let mut done: Vec<plan::Task> = self
+                            .plan
+                            .tasks
+                            .iter()
+                            .filter(|t| t.done && self.plan_ui.tag_filter.as_ref().is_none_or(|f| t.tags.contains(f)))
+                            .cloned()
+                            .collect();
+                        if !done.is_empty() {
+                            done.sort_by(|a, b| b.done_at.cmp(&a.done_at).then(b.id.cmp(&a.id)));
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                                ui.painter().circle_filled(r.center(), 4.0, pal.green);
+                                ui.label(egui::RichText::new(format!("{}  {}", tr!("ERLEDIGT" | "DONE"), done.len())).font(widgets::ui_font(10.5)).color(pal.green).extra_letter_spacing(1.0));
+                            });
+                            ui.add_space(2.0);
+                            for t in done {
+                                self.task_row(ui, &pal, &t, today, col_w, &mut toggle, &mut delete_task, &mut open_paper, &mut changed);
+                            }
+                            ui.add_space(10.0);
+                        }
                     }
                     if !any {
                         ui.add_space(10.0);
@@ -444,9 +468,24 @@ impl App {
         if editing {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(x, row.min.y + 7.0), pos2(row.max.x - 120.0, row.max.y - 5.0))));
             if let Some((_, s)) = &mut self.plan_ui.editing {
-                let r = child.add(egui::TextEdit::singleline(s).font(widgets::ui_font(13.5)).desired_width(f32::INFINITY));
-                r.request_focus();
-                if r.lost_focus() {
+                let id = Id::new(("task-edit", t.id));
+                child.add(egui::TextEdit::singleline(s).id(id).font(widgets::ui_font(13.5)).desired_width(f32::INFINITY));
+                let focused = child.ctx().memory(|m| m.has_focus(id));
+                let mut done = false;
+                if !self.plan_ui.edit_started {
+                    // focus once the double click is over (egui would take it away again)
+                    if focused {
+                        self.plan_ui.edit_started = true;
+                    } else if !child.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
+                        child.ctx().memory_mut(|m| m.request_focus(id));
+                    }
+                    child.ctx().request_repaint();
+                } else {
+                    // Enter, Esc or a click elsewhere end editing (and keep the text)
+                    done = !focused || child.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+                }
+                if done {
+                    child.ctx().memory_mut(|m| m.surrender_focus(id));
                     let c = plan::parse_capture(s, today);
                     if let Some(task) = self.plan.tasks.iter_mut().find(|x| x.id == t.id) {
                         task.text = c.text;
@@ -499,6 +538,7 @@ impl App {
                     s.push_str(&format!(" #{tag}"));
                 }
                 self.plan_ui.editing = Some((t.id, s));
+                self.plan_ui.edit_started = false;
             }
         }
         // right side: chips, star, due quick picks, delete
@@ -669,6 +709,17 @@ impl App {
 
 impl App {
     /// Screenshot tests: "planview-cap" types an example into the quick capture.
+    /// Debug: start editing a task like a double click would.
+    pub fn plan_debug_edit(&mut self, id: u64) {
+        let t = self.plan.tasks.iter().find(|t| t.id == id).map(|t| t.text.clone()).unwrap_or_default();
+        self.plan_ui.editing = Some((id, t));
+        self.plan_ui.edit_started = false;
+    }
+
+    pub fn plan_debug_editing(&self) -> bool {
+        self.plan_ui.editing.is_some()
+    }
+
     pub fn plan_ui_debug_input(&mut self, name: &str) {
         if name.contains("cap") && self.plan_ui.input.is_empty() {
             self.plan_ui.input = "Kapitel 3 überarbeiten bis Freitag #methodik !".into();

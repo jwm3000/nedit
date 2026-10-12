@@ -680,16 +680,21 @@ impl App {
             }
             divider(ui, pal);
             let mut sound = self.settings.pomo_sound;
-            let mut test = false;
-            row(ui, pal, tr!("Klang am Ende" | "Chime at the end"), tr!("Ein kurzer Glockenton nach jeder Phase" | "A short bell after each phase"), |ui| {
+            let mut test = None;
+            row(ui, pal, tr!("Klang am Ende" | "Chime at the end"), tr!("Glockenton nach jeder Phase, eine kleine Melodie vor der langen Pause" | "A bell after each phase, a little melody before the long break"), |ui| {
                 if toggle(ui, &mut sound, pal).changed() {
                     self.settings.pomo_sound = sound;
                     self.settings.save();
                 }
-                test = widgets::button(ui, ic::PLAY, tr!("Testen" | "Test"), pal, widgets::BtnKind::Ghost).clicked();
+                if widgets::button(ui, ic::PLAY, tr!("Lange Pause" | "Long break"), pal, widgets::BtnKind::Ghost).clicked() {
+                    test = Some(crate::pomodoro::Chime::Long);
+                }
+                if widgets::button(ui, ic::PLAY, tr!("Kurz" | "Short"), pal, widgets::BtnKind::Ghost).clicked() {
+                    test = Some(crate::pomodoro::Chime::Short);
+                }
             });
-            if test {
-                crate::pomodoro::play_chime();
+            if let Some(k) = test {
+                crate::pomodoro::play_chime(k);
             }
             divider(ui, pal);
             let mut fl = self.settings.pomo_float;

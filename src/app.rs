@@ -53,12 +53,13 @@ pub struct Settings {
     pub pomo_float: bool,
     /// show the remaining time (floating tomato, status bar)
     pub pomo_show_time: bool,
-    pub pomo_pos: Option<[f32; 2]>,
+    /// floating tomato: offset of its top left from the bottom right corner
+    pub pomo_corner: Option<[f32; 2]>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_show_time: true, pomo_pos: None }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_show_time: true, pomo_corner: None }
     }
 }
 
@@ -1379,6 +1380,49 @@ impl eframe::App for App {
                                 raw.events.push(key(egui::Key::L));
                             }
                             9 => eprintln!("KEYS show_pdf after Ctrl+L = {}", self.settings.show_pdf),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("pomodrag") && self.debug_typed < 20030 {
+                        if self.debug_typed < 20000 {
+                            self.debug_typed = 20000;
+                        }
+                        let k = self.debug_typed - 20000;
+                        let sc = ctx.content_rect();
+                        let start = sc.max - egui::vec2(124.0 - 46.0, 150.0 - 50.0);
+                        let btn = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+                        match k {
+                            1 => raw.events.push(egui::Event::PointerMoved(start)),
+                            2 => raw.events.push(btn(start, true)),
+                            3..=12 => raw.events.push(egui::Event::PointerMoved(start - egui::vec2(30.0, 30.0) * (k - 2) as f32)),
+                            13 => raw.events.push(btn(start - egui::vec2(300.0, 300.0), false)),
+                            16 => eprintln!("DRAG corner={:?} screen={:?}", self.settings.pomo_corner, sc.max),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("taskedit") && self.debug_typed < 19100 {
+                        if self.debug_typed < 19000 {
+                            self.debug_typed = 19000;
+                        }
+                        let k = self.debug_typed - 19000;
+                        let key = |key: egui::Key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+                        let id = self.plan.tasks.iter().find(|t| t.text.starts_with("Druckerei")).map(|t| t.id).unwrap_or(0);
+                        let text = |app: &App| app.plan.tasks.iter().find(|t| t.id == id).map(|t| t.text.clone()).unwrap_or_default();
+                        let far = egui::pos2(1500.0, 120.0);
+                        match k {
+                            1 | 20 | 40 => self.plan_debug_edit(id),
+                            5 => raw.events.push(egui::Event::Text(" A".into())),
+                            8 => raw.events.push(key(egui::Key::Escape)),
+                            12 => eprintln!("EDIT esc: editing={} text={:?}", self.plan_debug_editing(), text(self)),
+                            25 => raw.events.push(egui::Event::Text(" B".into())),
+                            28 => raw.events.push(key(egui::Key::Enter)),
+                            32 => eprintln!("EDIT enter: editing={} text={:?}", self.plan_debug_editing(), text(self)),
+                            45 => raw.events.push(egui::Event::Text(" C".into())),
+                            47 => raw.events.extend([egui::Event::PointerMoved(far), egui::Event::PointerButton { pos: far, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+                            48 => raw.events.push(egui::Event::PointerButton { pos: far, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }),
+                            54 => eprintln!("EDIT click: editing={} text={:?}", self.plan_debug_editing(), text(self)),
                             _ => {}
                         }
                         self.debug_typed += 1;
