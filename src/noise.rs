@@ -425,7 +425,7 @@ impl App {
             return;
         }
         let playing = self.noise.playing();
-        let (r, resp) = ui.allocate_exact_size(vec2(52.0, 30.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
         let hover = resp.hovered();
         // while playing the button glows softly (one slow breath every ~3 s)
         let glow = if playing { 0.5 + 0.5 * (now * std::f64::consts::TAU / 3.2).sin() as f32 } else { 0.0 };
@@ -436,9 +436,9 @@ impl App {
         let fill = if playing { with_alpha(pal.accent, (if hover { 55.0 } else { 32.0 } + 22.0 * glow) as u8) } else if hover { pal.surface } else { with_alpha(pal.surface, 160) };
         ui.painter().rect(r, 15.0, fill, Stroke::new(1.0, with_alpha(if playing { pal.accent } else { pal.border }, 140)), egui::StrokeKind::Inside);
         let col = if playing { pal.accent } else { pal.subtext };
-        // sound icon + play/pause, no animation
-        ui.painter().text(pos2(r.min.x + 17.0, r.center().y), Align2::CENTER_CENTER, self.settings.noise_sound.icon(), widgets::ui_font(13.0), col);
-        ui.painter().text(pos2(r.max.x - 17.0, r.center().y), Align2::CENTER_CENTER, if playing { crate::icons::PAUSE } else { crate::icons::PLAY }, widgets::ui_font(11.0), col);
+        // just play / pause (the play triangle sits a hair right of center optically)
+        let c = r.center() + vec2(if playing { 0.0 } else { 1.0 }, 0.0);
+        ui.painter().text(c, Align2::CENTER_CENTER, if playing { crate::icons::PAUSE } else { crate::icons::PLAY }, widgets::ui_font(11.0), col);
         let resp = resp.on_hover_text(format!(
             "{} · {}",
             self.settings.noise_sound.name(),
