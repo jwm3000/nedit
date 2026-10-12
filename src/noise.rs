@@ -380,7 +380,7 @@ mod tests {
 use crate::app::App;
 use crate::theme::{with_alpha, Palette};
 use crate::widgets;
-use egui::{pos2, vec2, Align2, Rect, Sense, Stroke};
+use egui::{pos2, vec2, Align2, Sense, Stroke};
 
 impl App {
     pub fn noise_set(&mut self, on: bool, now: f64) {
@@ -425,22 +425,14 @@ impl App {
             return;
         }
         let playing = self.noise.playing();
-        let (r, resp) = ui.allocate_exact_size(vec2(58.0, 30.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(vec2(52.0, 30.0), Sense::click());
         let hover = resp.hovered();
         let fill = if playing { with_alpha(pal.accent, if hover { 60 } else { 40 }) } else if hover { pal.surface } else { with_alpha(pal.surface, 160) };
         ui.painter().rect(r, 15.0, fill, Stroke::new(1.0, with_alpha(if playing { pal.accent } else { pal.border }, 140)), egui::StrokeKind::Inside);
         let col = if playing { pal.accent } else { pal.subtext };
-        let icon_c = pos2(r.min.x + 17.0, r.center().y);
-        ui.painter().text(icon_c, Align2::CENTER_CENTER, if playing { crate::icons::PAUSE } else { crate::icons::PLAY }, widgets::ui_font(11.0), col);
-        // little level meter: dances while playing, rests otherwise
-        for i in 0..4 {
-            let x = r.min.x + 32.0 + i as f32 * 5.0;
-            let h = if playing { 4.0 + 9.0 * (0.5 + 0.5 * ((now * (3.1 + i as f64 * 1.7)) + i as f64 * 1.3).sin() as f32) } else { 3.0 };
-            ui.painter().rect_filled(Rect::from_center_size(pos2(x, r.center().y), vec2(2.6, h)), 1.3, col);
-        }
-        if playing {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-        }
+        // sound icon + play/pause, no animation
+        ui.painter().text(pos2(r.min.x + 17.0, r.center().y), Align2::CENTER_CENTER, self.settings.noise_sound.icon(), widgets::ui_font(13.0), col);
+        ui.painter().text(pos2(r.max.x - 17.0, r.center().y), Align2::CENTER_CENTER, if playing { crate::icons::PAUSE } else { crate::icons::PLAY }, widgets::ui_font(11.0), col);
         let resp = resp.on_hover_text(format!(
             "{} · {}",
             self.settings.noise_sound.name(),
@@ -498,11 +490,7 @@ impl App {
                     // play state in the corner
                     let c = pos2(r.max.x - 18.0, r.min.y + 22.0);
                     if live {
-                        for i in 0..3 {
-                            let h = 3.0 + 8.0 * (0.5 + 0.5 * ((now * (3.3 + i as f64 * 1.9)) + i as f64).sin() as f32);
-                            ui.painter().rect_filled(Rect::from_center_size(pos2(c.x - 5.0 + i as f32 * 5.0, c.y), vec2(2.6, h)), 1.3, pal.accent);
-                        }
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+                        ui.painter().text(c, Align2::CENTER_CENTER, crate::icons::PAUSE, widgets::ui_font(10.0), pal.accent);
                     } else if hover {
                         ui.painter().text(c, Align2::CENTER_CENTER, crate::icons::PLAY, widgets::ui_font(10.0), col);
                     }

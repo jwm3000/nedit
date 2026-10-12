@@ -710,7 +710,7 @@ impl App {
             });
             divider(ui, pal);
             let mut st = self.settings.pomo_show_time;
-            row(ui, pal, tr!("Zeit anzeigen" | "Show the time"), tr!("Restzeit unter der Tomate und in der Statusleiste" | "Remaining time below the tomato and in the status bar"), |ui| {
+            row(ui, pal, tr!("Zeit anzeigen" | "Show the time"), tr!("Restzeit unter der schwebenden Tomate (die Statusleiste zeigt sie immer)" | "Remaining time below the floating tomato (the status bar always shows it)"), |ui| {
                 if toggle(ui, &mut st, pal).changed() {
                     self.settings.pomo_show_time = st;
                     self.settings.save();

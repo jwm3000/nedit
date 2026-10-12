@@ -2120,7 +2120,7 @@ impl App {
                         ui.label(small(format!("{}  {}", ic::BRUSH, self.pal.name), pal.dim));
                         ui.add_space(10.0);
                         // running pomodoro → open the plan
-                        if (self.pomo.running || self.pomo.waiting()) && self.settings.pomo_show_time {
+                        if self.pomo.running || self.pomo.waiting() {
                             let txt = format!("{}  {}  {}", ic::CLOCK, self.pomo.phase_name(), self.pomo.label(&self.settings));
                             let r = ui.add(egui::Label::new(small(txt, pal.red)).sense(egui::Sense::click())).on_hover_text(tr!("Pomodoro – Klick öffnet den Plan" | "Pomodoro – click opens the plan"));
                             if r.clicked() {
