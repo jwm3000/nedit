@@ -2121,8 +2121,22 @@ impl App {
                         ui.add_space(10.0);
                         // running pomodoro → open the plan
                         if self.pomo.running || self.pomo.waiting() {
-                            let txt = format!("{}  {}  {}", ic::CLOCK, self.pomo.phase_name(), self.pomo.label(&self.settings));
-                            let r = ui.add(egui::Label::new(small(txt, pal.red)).sense(egui::Sense::click())).on_hover_text(tr!("Pomodoro – Klick öffnet den Plan" | "Pomodoro – click opens the plan"));
+                            // fixed width (widest phase name + mono digits), so nothing jumps while it counts
+                            let font = widgets::ui_font(11.5);
+                            let mono = widgets::mono_font(11.5);
+                            let name_w = [tr!("Fokus" | "Focus"), tr!("Kurze Pause" | "Short break"), tr!("Lange Pause" | "Long break")]
+                                .iter()
+                                .map(|n| ui.painter().layout_no_wrap(n.to_string(), font.clone(), pal.red).size().x)
+                                .fold(0.0f32, f32::max);
+                            let time_w = ui.painter().layout_no_wrap("00:00".into(), mono.clone(), pal.red).size().x;
+                            let (rect, r) = ui.allocate_exact_size(egui::vec2(18.0 + name_w + 8.0 + time_w, ui.available_height()), egui::Sense::click());
+                            let y = rect.center().y;
+                            let p = ui.painter();
+                            p.text(egui::pos2(rect.min.x, y), egui::Align2::LEFT_CENTER, ic::CLOCK, font.clone(), pal.red);
+                            // clock · time · phase – the spare room stays invisible at the end
+                            p.text(egui::pos2(rect.min.x + 18.0, y), egui::Align2::LEFT_CENTER, self.pomo.label(&self.settings), mono, pal.red);
+                            p.text(egui::pos2(rect.min.x + 18.0 + time_w + 8.0, y), egui::Align2::LEFT_CENTER, self.pomo.phase_name(), font, pal.red);
+                            let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr!("Pomodoro – Klick öffnet den Plan" | "Pomodoro – click opens the plan"));
                             if r.clicked() {
                                 self.tab = Tab::Shelf;
                                 self.shelf_ui.plan_view = true;
