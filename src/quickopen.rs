@@ -67,6 +67,7 @@ enum Cmd {
     PomoToggle,
     PomoFloat,
     PomoReset,
+    Noise,
     Vim,
     Theme(Option<String>),
 }
@@ -283,6 +284,7 @@ impl App {
                 (ic::CLOCK, if self.pomo.running { tr!("Pomodoro pausieren" | "Pause pomodoro") } else { tr!("Pomodoro starten" | "Start pomodoro") }.into(), Cmd::PomoToggle),
                 (ic::CLOCK, if self.settings.pomo_float { tr!("Pomodoro-Tomate ausblenden" | "Hide the pomodoro tomato") } else { tr!("Pomodoro-Tomate anzeigen" | "Show the pomodoro tomato") }.into(), Cmd::PomoFloat),
                 (ic::UNDO, tr!("Pomodoro zurücksetzen" | "Reset pomodoro").into(), Cmd::PomoReset),
+                (ic::HEADPHONES, if self.noise.playing() { tr!("Fokus-Geräusch pausieren" | "Pause focus sound") } else { tr!("Fokus-Geräusch abspielen" | "Play focus sound") }.into(), Cmd::Noise),
                 (ic::MAGIC, tr!("Theme: Omarchy folgen" | "Theme: follow Omarchy").into(), Cmd::Theme(None)),
                 (ic::MOON, "Theme: nEdit Ink".into(), Cmd::Theme(Some("nedit".into()))),
                 (ic::SUN, "Theme: nEdit Light".into(), Cmd::Theme(Some("nedit-light".into()))),
@@ -400,6 +402,15 @@ impl App {
                     self.settings.save();
                 }
                 Cmd::PomoReset => self.pomo.reset(),
+                Cmd::Noise => {
+                    // switching it on from here also enables the feature (and its button)
+                    if !self.settings.noise_enabled {
+                        self.settings.noise_enabled = true;
+                        self.settings.save();
+                    }
+                    let now = ctx.input(|i| i.time);
+                    self.noise_toggle(now);
+                }
                 Cmd::Plan => {
                     self.tab = Tab::Shelf;
                     self.shelf_ui.plan_view = true;

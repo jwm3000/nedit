@@ -38,7 +38,7 @@ impl Page {
             Page::Editor => "Editor",
             Page::Project => tr!("Projekt" | "Project"),
             Page::System => tr!("TeX & Werkzeuge" | "TeX & tools"),
-            Page::Pomodoro => "Pomodoro",
+            Page::Pomodoro => tr!("Fokus" | "Focus"),
             Page::General => tr!("Allgemein" | "General"),
         }
     }
@@ -48,7 +48,7 @@ impl Page {
             Page::Editor => tr!("Eingabe und Kompilieren" | "Input and compiling"),
             Page::Project => tr!("Compiler und Präsentation" | "Compiler and presentation"),
             Page::System => tr!("Was fehlt und wie installieren" | "What is missing and how to install"),
-            Page::Pomodoro => tr!("Fokus-Timer als Tomate" | "Focus timer as a tomato"),
+            Page::Pomodoro => tr!("Pomodoro und Geräusche" | "Pomodoro and sounds"),
             Page::General => tr!("Sprache, Updates, Hilfe" | "Language, updates, help"),
         }
     }
@@ -413,7 +413,11 @@ impl App {
                 cui.label(egui::RichText::new(self.settings_page.title()).font(widgets::display_font(26.0)).color(pal.bright));
                 cui.label(egui::RichText::new(self.settings_page.subtitle()).font(widgets::ui_font(12.5)).color(pal.dim));
                 cui.add_space(8.0);
-                egui::ScrollArea::vertical().id_salt(("settings-page", self.settings_page as u8)).auto_shrink([false, false]).show(&mut cui, |ui| {
+                let mut sa = egui::ScrollArea::vertical().id_salt(("settings-page", self.settings_page as u8)).auto_shrink([false, false]);
+                if std::env::var("NEDIT_SHOT").is_ok_and(|v| v.contains("scrolldown")) {
+                    sa = sa.vertical_scroll_offset(560.0);
+                }
+                sa.show(&mut cui, |ui| {
                     ui.set_width(content.width() - 12.0);
                     match self.settings_page {
                         Page::Appearance => self.page_appearance(ui, pal, ctx),
@@ -643,7 +647,7 @@ impl App {
 
     fn page_pomodoro(&mut self, ui: &mut Ui, pal: &Palette, now: f64) {
         // the timer itself, right here
-        heading(ui, pal, tr!("Timer" | "Timer"));
+        heading(ui, pal, tr!("Pomodoro" | "Pomodoro"));
         card(ui, pal, |ui| {
             ui.add_space(6.0);
             self.pomodoro_card(ui, pal, now);
@@ -713,7 +717,38 @@ impl App {
                 }
             });
         });
-    }
+            heading(ui, pal, tr!("Geräusche" | "Sounds"));
+        card(ui, pal, |ui| {
+            let mut en = self.settings.noise_enabled;
+            row(ui, pal, tr!("Fokus-Geräusche" | "Focus sounds"), tr!("Rauschen, Regen, Meer … – oben erscheint ein Play/Pause-Knopf" | "Noise, rain, sea … – a play/pause button appears at the top"), |ui| {
+                if toggle(ui, &mut en, pal).changed() {
+                    self.settings.noise_enabled = en;
+                    self.settings.save();
+                }
+            });
+            if self.settings.noise_enabled {
+                divider(ui, pal);
+                ui.add_space(8.0);
+                self.noise_settings(ui, pal, now);
+                divider(ui, pal);
+                let mut v = self.settings.noise_volume * 100.0;
+                row(ui, pal, tr!("Lautstärke" | "Volume"), "", |ui| {
+                    if widgets::fancy_slider(ui, &mut v, 0.0, 100.0, 1.0, "%", pal).changed() {
+                        self.settings.noise_volume = v / 100.0;
+                        self.settings.save();
+                    }
+                });
+                divider(ui, pal);
+                let mut wp = self.settings.noise_with_pomo;
+                row(ui, pal, tr!("Mit Pomodoro koppeln" | "Follow the pomodoro"), tr!("Spielt in Fokus-Runden, schweigt in den Pausen" | "Plays in focus rounds, quiet in breaks"), |ui| {
+                    if toggle(ui, &mut wp, pal).changed() {
+                        self.settings.noise_with_pomo = wp;
+                        self.settings.save();
+                    }
+                });
+            }
+        });
+}
 
     fn page_general(&mut self, ui: &mut Ui, pal: &Palette, ctx: &egui::Context) {
         heading(ui, pal, tr!("Sprache" | "Language"));

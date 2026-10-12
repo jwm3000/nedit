@@ -129,6 +129,16 @@ Diese Woche …; `@quelle` verlinkt die Bibliothek. `% TODO …` und `\todo{…}
 automatisch (Klick springt hin). Notizen als farbige Karten zum Anheften. Alles liegt in
 `.nedit/plan.json` und wird mit Git versioniert.
 
+### 🍅 Fokus: Pomodoro & Geräusche
+
+Die Pomodoro-Tomate ist die Uhr: der rote Teil läuft wie ein Zeiger ab – rot im Fokus, grün in
+der kurzen, golden in der langen Pause (Standard 4 × 25 min, 5 min, 15 min; einstellbar). Am Ende
+jeder Phase klingt eine Glocke, vor der langen Pause eine kleine Melodie. Die Tomate schwebt auf
+Wunsch über allem, lässt sich ziehen und merkt sich ihren Platz. **Fokus-Geräusche** (braunes,
+rosa, weißes Rauschen, Regen, Meer, Kaminfeuer) werden live erzeugt; eingeschaltet erscheint oben
+ein Play/Pause-Knopf, auf Wunsch spielen sie nur in den Fokus-Runden. Alles unter Einstellungen →
+Fokus und per Strg+P.
+
 **Projekteinstellungen** (Projekt-Dropdown): Name, Icon, Hauptdokumente – und „Projekt löschen“
 (der Ordner wandert in den Papierkorb).
 

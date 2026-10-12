@@ -53,13 +53,19 @@ pub struct Settings {
     pub pomo_float: bool,
     /// show the remaining time (floating tomato, status bar)
     pub pomo_show_time: bool,
+    /// focus sounds: feature on (shows the play button in the top bar), sound, volume 0..1
+    pub noise_enabled: bool,
+    pub noise_sound: crate::noise::Sound,
+    pub noise_volume: f32,
+    /// play during pomodoro focus rounds, pause in breaks
+    pub noise_with_pomo: bool,
     /// floating tomato: offset of its top left from the bottom right corner
     pub pomo_corner: Option<[f32; 2]>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_show_time: true, pomo_corner: None }
+        Settings { theme: None, font_size: 14.0, last_project: None, auto_compile: true, dark_pdf: false, pdf_frac: 0.5, stage_frac: 0.52, visual: false, doc_width: 820.0, update_check: true, input_vim: false, lang_en: false, show_pdf: true, diff_split: false, slides_visual: false, show_stage: true, visual_images: true, pomo_work: 25, pomo_short: 5, pomo_long: 15, pomo_rounds: 4, pomo_sound: true, pomo_float: false, pomo_show_time: true, pomo_corner: None, noise_enabled: false, noise_sound: crate::noise::Sound::Brown, noise_volume: 0.5, noise_with_pomo: false }
     }
 }
 
@@ -258,6 +264,7 @@ pub struct App {
     pub plan: crate::plan::Plan,
     pub plan_ui: crate::plan_ui::PlanUi,
     pub pomo: crate::pomodoro::Pomodoro,
+    pub noise: crate::noise::Noise,
     /// Figures for the visual mode: absolute path → (file stamp, texture).
     figs: HashMap<std::path::PathBuf, (u64, Option<egui::TextureHandle>)>,
     /// Per file: (text hash, path as written → texture id + size).
@@ -349,6 +356,7 @@ impl App {
             plan: Default::default(),
             plan_ui: Default::default(),
             pomo: Default::default(),
+            noise: Default::default(),
             figs: Default::default(),
             fig_index: Default::default(),
             deps: None,
@@ -1845,6 +1853,7 @@ impl eframe::App for App {
         }
         self.periodic(&ctx, now);
         self.pomodoro_tick(&ctx, now);
+        self.noise_tick(now);
         self.handle_drops(&ctx, now);
 
         if self.present.is_some() {
@@ -1982,6 +1991,11 @@ impl App {
                     ];
                     if widgets::segmented(ui, "maintabs", &items, &mut sel, pal) {
                         self.tab = [Tab::Thesis, Tab::Slides, Tab::Shelf][sel];
+                    }
+                    // focus sounds (only when switched on in the settings)
+                    if self.settings.noise_enabled {
+                        ui.add_space(8.0);
+                        self.noise_button(ui, pal, now);
                     }
 
                     // right side
@@ -2847,6 +2861,10 @@ impl App {
                     b.text.insert_str(p, "\\begin{frame}{Leere Folie}\n\\end{frame}\n\n");
                 }
             }
+        }
+        if name.contains("noise") {
+            self.settings.noise_enabled = true;
+            self.settings.noise_sound = crate::noise::Sound::Rain;
         }
         if name.contains("pomo") && !self.pomo.running {
             self.settings.pomo_float = true;
