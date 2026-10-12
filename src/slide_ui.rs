@@ -178,6 +178,11 @@ enum Op {
     ItemEnter(Vec<usize>, usize, usize),
     ItemBackspace(Vec<usize>, usize),
     ItemIndent(Vec<usize>, usize, i32),
+    /// toggle `\pause` before an item
+    ItemPause(Vec<usize>, usize),
+    /// Ctrl+Enter: new item that appears one step later
+    ItemEnterStep(Vec<usize>, usize, usize),
+    TocCols(Vec<usize>, u8),
     /// table cell navigation: (path, row, col, drow, dcol)
     CellMove(Vec<usize>, usize, usize, i32, i32),
     FocusSibling(Id, i32),
@@ -207,7 +212,7 @@ struct Cx<'a> {
     ops: Vec<Op>,
     ed: &'a mut SlideEditor,
     dirs: (PathBuf, PathBuf),
-    sections: Vec<String>,
+    toc: Vec<(u8, String)>,
     meta: HashMap<&'static str, String>,
     fields: Vec<Id>,
     rects: HashMap<Vec<usize>, Rect>,
@@ -231,7 +236,7 @@ pub fn field_id(frame: usize, path: &[usize], sub: usize) -> Id {
 
 fn new_elem(kind: NewKind, tug: bool, booktabs: bool) -> Elem {
     let (ul, ol, cols) = if tug { ("tugitemize", "tugenumerate", "tugcolumns") } else { ("itemize", "enumerate", "columns") };
-    let item = || Item { level: 0, overlay: String::new(), text: String::new() };
+    let item = || Item { level: 0, overlay: String::new(), text: String::new(), pause: false };
     match kind {
         NewKind::Text => Elem::Text(String::new()),
         NewKind::Bullets => Elem::List { env: ul.into(), numbered: false, step: false, items: vec![item()] },
@@ -290,6 +295,8 @@ struct FieldStyle {
 struct FieldOut {
     /// Enter at char position
     enter: Option<usize>,
+    /// Ctrl+Enter at char position
+    ctrl_enter: Option<usize>,
     /// Backspace at position 0 (no selection)
     backspace_start: bool,
     tab: bool,
@@ -312,6 +319,9 @@ fn field(ui: &mut Ui, cx: &mut Cx, id: Id, path: &[usize], text: &mut String, fs
         ctx.input_mut(|i| {
             if fs.enter == EnterMode::Split && i.consume_key(Modifiers::NONE, Key::Enter) {
                 out.enter = Some(sel.0);
+            }
+            if fs.tabs && fs.enter == EnterMode::Split && i.consume_key(Modifiers::COMMAND, Key::Enter) {
+                out.ctrl_enter = Some(sel.0);
             }
             if collapsed && sel.0 == 0 && i.key_pressed(Key::Backspace) && !i.modifiers.any() {
                 i.consume_key(Modifiers::NONE, Key::Backspace);
@@ -794,16 +804,38 @@ fn elem(ui: &mut Ui, cx: &mut Cx, e: &mut Elem, path: &[usize], width: f32) {
         }
         Elem::List { numbered, items, step, .. } => {
             let mut counters = [0usize; 6];
+            let any_pause = items.iter().any(|i| i.pause);
+            let mut step_no = 1usize;
+            let row_w = width;
             for idx in 0..items.len() {
                 let level = items[idx].level.min(5) as usize;
                 counters[level] += 1;
                 for c in counters.iter_mut().skip(level + 1) {
                     *c = 0;
                 }
+                if items[idx].pause {
+                    step_no += 1;
+                    // divider: the following items appear one click later
+                    let (r, _) = ui.allocate_exact_size(vec2(row_w, 13.0 * k), Sense::hover());
+                    let y = r.center().y;
+                    let mut x = r.min.x + level as f32 * 20.0 * k;
+                    while x < r.max.x - 70.0 * k {
+                        ui.painter().line_segment([pos2(x, y), pos2((x + 5.0).min(r.max.x), y)], Stroke::new(1.0, Color32::from_gray(195)));
+                        x += 9.0;
+                    }
+                    let pill = Rect::from_min_size(pos2(r.max.x - 66.0 * k, y - 6.5 * k), vec2(64.0 * k, 13.0 * k));
+                    let presp = ui.interact(pill, Id::new(("pause-pill", frame, path.to_vec(), idx)), Sense::click()).on_hover_text(tr!("Klick: Pause entfernen" | "Click: remove the pause"));
+                    ui.painter().rect_filled(pill, 6.0, if presp.hovered() { mix(SEL, Color32::WHITE, 0.8) } else { Color32::from_gray(240) });
+                    ui.painter().text(pill.center(), Align2::CENTER_CENTER, format!("⏸ {} {step_no}", tr!("Schritt" | "Step")), FontId::proportional(8.5 * k.max(0.9)), if presp.hovered() { SEL } else { Color32::from_gray(110) });
+                    if presp.clicked() {
+                        cx.ops.push(Op::ItemPause(path.to_vec(), idx));
+                    }
+                }
                 let indent = level as f32 * 20.0 * k;
                 let size = (15.0 - level as f32 * 1.5) * k;
                 let numbered = *numbered;
-                let step = *step;
+                let step_all = *step;
+                let row_top = ui.cursor().min.y;
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.add_space(indent);
@@ -811,7 +843,12 @@ fn elem(ui: &mut Ui, cx: &mut Cx, e: &mut Elem, path: &[usize], width: f32) {
                     let c = pos2(r.min.x + 6.0 * k, r.center().y);
                     let accent = if cx.tug { TUG_RED } else { TUG_BLUE };
                     if numbered {
-                        let label = if level == 0 { format!("{}.", counters[0]) } else { format!("{}.", (b'a' + ((counters[level] - 1) % 26) as u8) as char) };
+                        let n = counters[level];
+                        let label = match level % 3 {
+                            0 => format!("{n}."),
+                            1 => format!("{}.", (b'a' + ((n - 1) % 26) as u8) as char),
+                            _ => format!("{}.", roman(n)),
+                        };
                         ui.painter().text(pos2(r.min.x, r.center().y), Align2::LEFT_CENTER, label, FontId::proportional(size * 0.95), accent);
                     } else if cx.tug {
                         let s = (5.5 - level as f32) * k;
@@ -819,18 +856,43 @@ fn elem(ui: &mut Ui, cx: &mut Cx, e: &mut Elem, path: &[usize], width: f32) {
                     } else {
                         ui.painter().circle_filled(c, 2.6 * k, accent);
                     }
-                    let overlay = if step { format!("{}", idx + 1) } else { items[idx].overlay.trim_matches(['<', '>']).to_string() };
+                    let badge = if step_all {
+                        format!("{} {}", ic::STEP, idx + 1)
+                    } else if any_pause {
+                        format!("{} {step_no}", ic::STEP)
+                    } else if !items[idx].overlay.is_empty() {
+                        format!("{} {}", ic::STEP, items[idx].overlay.trim_matches(['<', '>']))
+                    } else {
+                        String::new()
+                    };
                     let fs = FieldStyle { size, color: INK, bold: false, mono: false, hint: "Aufzählungspunkt …", enter: EnterMode::Split, tabs: true };
-                    let w = (width - indent - 18.0 * k - if overlay.is_empty() { 0.0 } else { 34.0 * k }).max(40.0);
+                    let reserve = 30.0 * k + 22.0 * k;
+                    let w = (width - indent - 18.0 * k - reserve).max(40.0);
                     let o = field(ui, cx, fid(SUB_ITEM + idx), path, &mut items[idx].text, &fs, w);
-                    if !overlay.is_empty() {
-                        let (br, _) = ui.allocate_exact_size(vec2(30.0 * k, size * 1.2), Sense::hover());
-                        let pill = Rect::from_center_size(br.center(), vec2(24.0 * k, size * 0.95));
-                        ui.painter().rect_filled(pill, 6.0, Color32::from_gray(232));
-                        ui.painter().text(pill.center(), Align2::CENTER_CENTER, format!("▸{overlay}"), FontId::proportional(size * 0.55), Color32::from_gray(110));
+                    let (br, _) = ui.allocate_exact_size(vec2(30.0 * k, size * 1.2), Sense::hover());
+                    if !badge.is_empty() {
+                        let pill = Rect::from_center_size(br.center(), vec2(26.0 * k, size * 0.95));
+                        ui.painter().rect_filled(pill, 6.0, Color32::from_gray(234));
+                        ui.painter().text(pill.center(), Align2::CENTER_CENTER, badge, FontId::proportional(size * 0.55), Color32::from_gray(100));
+                    }
+                    // pause toggle (shown on hover / while editing the item)
+                    let (pr, _) = ui.allocate_exact_size(vec2(22.0 * k, size * 1.2), Sense::hover());
+                    let row = Rect::from_min_max(pos2(ui.max_rect().min.x, row_top), pos2(pr.max.x, pr.max.y));
+                    let editing = ui.ctx().memory(|m| m.has_focus(fid(SUB_ITEM + idx)));
+                    if (ui.rect_contains_pointer(row) || editing) && idx > 0 && !step_all {
+                        let presp = ui.interact(pr, Id::new(("pause-btn", frame, path.to_vec(), idx)), Sense::click()).on_hover_text(if items[idx].pause { tr!("Pause vor diesem Punkt entfernen" | "Remove the pause before this item") } else { tr!("Pause: dieser Punkt erscheint einen Schritt später (Strg+Enter beim Anlegen)" | "Pause: this item appears one step later (Ctrl+Enter when creating)") });
+                        let on = items[idx].pause;
+                        ui.painter().rect_filled(pr.shrink(2.0), 5.0, if on { with_alpha(SEL, 60) } else if presp.hovered() { Color32::from_gray(228) } else { Color32::from_gray(242) });
+                        ui.painter().text(pr.center(), Align2::CENTER_CENTER, "⏸", FontId::proportional(size * 0.6), if on { SEL } else { Color32::from_gray(110) });
+                        if presp.clicked() {
+                            cx.ops.push(Op::ItemPause(path.to_vec(), idx));
+                        }
                     }
                     if let Some(at) = o.enter {
                         cx.ops.push(Op::ItemEnter(path.to_vec(), idx, at));
+                    }
+                    if let Some(at) = o.ctrl_enter {
+                        cx.ops.push(Op::ItemEnterStep(path.to_vec(), idx, at));
                     }
                     if o.backspace_start {
                         cx.ops.push(Op::ItemBackspace(path.to_vec(), idx));
@@ -1020,21 +1082,52 @@ fn elem(ui: &mut Ui, cx: &mut Cx, e: &mut Elem, path: &[usize], width: f32) {
             ui.painter().rect_filled(pill, 8.0, Color32::from_gray(244));
             ui.painter().galley(pill.center() - g.size() / 2.0, g, Color32::from_gray(120));
         }
-        Elem::Toc => {
-            let secs = cx.sections.clone();
-            if secs.is_empty() {
+        Elem::Toc { cols } => {
+            // like Beamer: numbered sections, subsections indented below them
+            let toc = cx.toc.clone();
+            if toc.is_empty() {
                 ui.label(egui::RichText::new(crate::i18n::t("Inhaltsverzeichnis – Abschnitte erscheinen hier")).size(12.0 * k).color(Color32::from_gray(140)));
             }
-            for (i, s) in secs.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(16.0 * k, 16.0 * k), Sense::hover());
-                    ui.painter().rect_filled(r, 0.0, TUG_BLUE);
-                    ui.painter().text(r.center(), Align2::CENTER_CENTER, (i + 1).to_string(), FontId::proportional(10.0 * k), Color32::WHITE);
-                    ui.add_space(6.0 * k);
-                    ui.label(egui::RichText::new(s).size(14.0 * k).color(INK));
-                });
-                ui.add_space(4.0 * k);
+            let ncols = (*cols).clamp(1, 3) as usize;
+            // split into columns at section boundaries
+            let n_sections = toc.iter().filter(|t| t.0 == 1).count().max(1);
+            let per_col = n_sections.div_ceil(ncols);
+            let mut columns: Vec<Vec<(u8, String, usize)>> = vec![vec![]; ncols];
+            let mut sec_no = 0;
+            for (lvl, t) in &toc {
+                if *lvl == 1 {
+                    sec_no += 1;
+                }
+                let col = ((sec_no.max(1) - 1) / per_col).min(ncols - 1);
+                columns[col].push((*lvl, t.clone(), sec_no));
             }
+            let cw = width / ncols as f32;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for col in columns {
+                    ui.allocate_ui_with_layout(vec2(cw, 10.0), egui::Layout::top_down(Align::Min), |ui| {
+                        ui.set_width(cw);
+                        for (lvl, t, n) in col {
+                            ui.horizontal(|ui| {
+                                if lvl == 1 {
+                                    let (r, _) = ui.allocate_exact_size(vec2(16.0 * k, 16.0 * k), Sense::hover());
+                                    ui.painter().rect_filled(r, 0.0, TUG_BLUE);
+                                    ui.painter().text(r.center(), Align2::CENTER_CENTER, n.to_string(), FontId::proportional(10.0 * k), Color32::WHITE);
+                                    ui.add_space(6.0 * k);
+                                    ui.label(egui::RichText::new(slides_plain(&t)).size(14.0 * k).color(INK));
+                                } else {
+                                    ui.add_space(26.0 * k);
+                                    let (r, _) = ui.allocate_exact_size(vec2(5.0 * k, 12.0 * k), Sense::hover());
+                                    ui.painter().rect_filled(Rect::from_center_size(r.center(), vec2(4.0 * k, 4.0 * k)), 0.0, mix(TUG_BLUE, Color32::WHITE, 0.3));
+                                    ui.add_space(6.0 * k);
+                                    ui.label(egui::RichText::new(slides_plain(&t)).size(11.5 * k).color(Color32::from_gray(70)));
+                                }
+                            });
+                            ui.add_space(if lvl == 1 { 3.0 } else { 1.0 } * k);
+                        }
+                    });
+                }
+            });
         }
         Elem::TitlePage => {
             for (n, (cmd, size, color, hint)) in [("title", 21.0, TUG_BLUE, "Titel der Präsentation"), ("subtitle", 14.0, TUG_BLUE, ""), ("author", 13.0, INK, "Name"), ("institute", 10.0, Color32::from_gray(90), ""), ("date", 11.0, Color32::from_gray(90), "Datum")]
@@ -1170,6 +1263,15 @@ fn floating_toolbar(ctx: &egui::Context, cx: &mut Cx, slide: &Slide, path: &[usi
                                 }
                                 if fbtn(ui, ic::PLUS, tr!("Größer" | "Larger"), false) {
                                     ops.push(Op::ImageSize(p.clone(), 0.1));
+                                }
+                                fsep(ui);
+                            }
+                            Elem::Toc { cols } => {
+                                if fbtn(ui, "1", tr!("Einspaltig" | "One column"), *cols <= 1) {
+                                    ops.push(Op::TocCols(p.clone(), 1));
+                                }
+                                if fbtn(ui, "2", tr!("Zweispaltig" | "Two columns"), *cols == 2) {
+                                    ops.push(Op::TocCols(p.clone(), 2));
                                 }
                                 fsep(ui);
                             }
@@ -1686,7 +1788,7 @@ fn mini_slide(p: &egui::Painter, r: Rect, s: &Slide, tug: bool) {
                     y += 6.0 * k;
                 }
             }
-            Elem::Toc => {
+            Elem::Toc { .. } => {
                 for _ in 0..3 {
                     p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(4.0 * k, 4.0 * k)), 0.0, TUG_BLUE);
                     line(p, y, 0.5, Color32::from_gray(190));
@@ -1981,12 +2083,6 @@ impl App {
             w = ((avail.height() - 70.0) / ratio).max(320.0);
         }
         let meta: HashMap<&'static str, String> = deck.meta.iter().map(|m| (m.cmd, m.value.clone())).collect();
-        let mut sections: Vec<String> = vec![];
-        for f in &deck.frames {
-            if !f.section.is_empty() && sections.last() != Some(&f.section) {
-                sections.push(f.section.clone());
-            }
-        }
         let slides_main = self.project.config.slides_main.clone();
         let dir = self.project.root.join(&slides_main).parent().map(Path::to_path_buf).unwrap_or_else(|| self.project.root.clone());
         let root = self.project.root.clone();
@@ -2010,7 +2106,7 @@ impl App {
                 ops: vec![],
                 ed: &mut self.slide_ed,
                 dirs: (dir.clone(), root.clone()),
-                sections,
+                toc: deck.toc.clone(),
                 meta,
                 fields: vec![],
                 rects: HashMap::new(),
@@ -2130,6 +2226,31 @@ impl App {
                         None => {}
                     }
                     structural = true;
+                }
+                Op::ItemPause(p, idx) => {
+                    if let Some(Elem::List { items, .. }) = slides::elem_mut(&mut slide.body, &p) {
+                        if let Some(it) = items.get_mut(idx) {
+                            it.pause = !it.pause;
+                            structural = true;
+                        }
+                    }
+                }
+                Op::ItemEnterStep(p, idx, at) => {
+                    if let Some(ListResult::Item(i, c)) = slides::list_enter(&mut slide.body, &p, idx, at) {
+                        if i == idx + 1 {
+                            if let Some(Elem::List { items, .. }) = slides::elem_mut(&mut slide.body, &p) {
+                                items[i].pause = true;
+                            }
+                        }
+                        ed.focus(field_id(frame, &p, SUB_ITEM + i), c);
+                    }
+                    structural = true;
+                }
+                Op::TocCols(p, n) => {
+                    if let Some(Elem::Toc { cols }) = slides::elem_mut(&mut slide.body, &p) {
+                        *cols = n;
+                        structural = true;
+                    }
                 }
                 Op::ItemIndent(p, idx, d) => {
                     slides::list_indent(&mut slide.body, &p, idx, d);
@@ -2450,4 +2571,16 @@ mod tests {
         assert_eq!(visible, "a b % x");
         assert_eq!(slides_plain("Hops\\\\Yeast \\textbf{x}"), "Hops Yeast x");
     }
+}
+
+fn roman(n: usize) -> String {
+    let mut n = n;
+    let mut s = String::new();
+    for (v, r) in [(10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")] {
+        while n >= v {
+            s.push_str(r);
+            n -= v;
+        }
+    }
+    s
 }

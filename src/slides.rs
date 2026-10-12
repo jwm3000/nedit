@@ -14,6 +14,8 @@ pub struct Item {
     /// Overlay spec such as `<2->` (kept as written).
     pub overlay: String,
     pub text: String,
+    /// `\pause` before this item (it appears one step later)
+    pub pause: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,7 +73,8 @@ pub enum Elem {
     },
     Pause,
     TitlePage,
-    Toc,
+    /// `\tableofcontents`, optionally in `multicols` (cols = 2 …)
+    Toc { cols: u8 },
     Raw(String),
 }
 
@@ -127,6 +130,8 @@ pub struct Deck {
     pub doc_end: usize,
     /// booktabs is loaded (new tables use \toprule …)
     pub booktabs: bool,
+    /// Table of contents: (level 1 = section / 2 = subsection, title)
+    pub toc: Vec<(u8, String)>,
 }
 
 // ───────────────────────────── scanning helpers ─────────────────────────────
@@ -246,6 +251,8 @@ fn parse_items(body: &str, level: u8, out: &mut Vec<Item>) -> bool {
     let b = body.as_bytes();
     let mut cur: Option<Item> = None;
     let mut text = String::new();
+    // a \pause seen since the last item: the next item appears one step later
+    let mut pending_pause = false;
     let flush = |cur: &mut Option<Item>, text: &mut String, out: &mut Vec<Item>| {
         if let Some(mut it) = cur.take() {
             it.text = unwrap_par(text);
@@ -255,6 +262,12 @@ fn parse_items(body: &str, level: u8, out: &mut Vec<Item>) -> bool {
     };
     while i < body.len() {
         let r = &body[i..];
+        if r.starts_with("\\pause") && !r[6..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+            flush(&mut cur, &mut text, out);
+            pending_pause = true;
+            i += 6;
+            continue;
+        }
         if r.starts_with("\\item") && !r[5..].starts_with(|c: char| c.is_ascii_alphabetic()) {
             flush(&mut cur, &mut text, out);
             let mut j = i + 5;
@@ -267,7 +280,8 @@ fn parse_items(body: &str, level: u8, out: &mut Vec<Item>) -> bool {
             if body[j..].starts_with('[') {
                 return false; // custom labels: not supported visually
             }
-            cur = Some(Item { level, overlay, text: String::new() });
+            cur = Some(Item { level, overlay, text: String::new(), pause: pending_pause });
+            pending_pause = false;
             i = skip_sp(body, j);
             continue;
         }
@@ -299,7 +313,8 @@ fn parse_items(body: &str, level: u8, out: &mut Vec<Item>) -> bool {
         i += ch.len_utf8();
     }
     flush(&mut cur, &mut text, out);
-    true
+    // a \pause after the last item has no item to attach to
+    !pending_pause
 }
 
 /// Parse a frame (or column/block) body into elements.
@@ -345,7 +360,7 @@ pub fn parse_body(s: &str) -> Vec<Elem> {
                     continue;
                 }
                 "\\tableofcontents" => {
-                    simple(Elem::Toc, &mut par, &mut out);
+                    simple(Elem::Toc { cols: 1 }, &mut par, &mut out);
                     i = line_end;
                     continue;
                 }
@@ -360,6 +375,17 @@ pub fn parse_body(s: &str) -> Vec<Elem> {
                             continue;
                         }
                     }
+                }
+                "\\centering" if par.trim().is_empty() && {
+                    let next = skip_ws(s, line_end);
+                    let nl = s[next..].find('\n').map_or(s.len(), |p| next + p);
+                    let l = s[next..nl].trim();
+                    !l.is_empty() && !l.starts_with("\\begin") && !l.starts_with("\\includegraphics") && !l.starts_with('%') && !l.starts_with("\\[")
+                } => {
+                    // \centering before a paragraph: part of its style
+                    par.push_str("\\centering ");
+                    i = skip_ws(s, line_end);
+                    continue;
                 }
                 "\\centering" if par.trim().is_empty() => {
                     // a lone \centering before an image belongs to the image
@@ -530,8 +556,11 @@ fn parse_env(env: &str, s: &str, head_end: usize, body_end: usize) -> Option<Ele
         "multicols" => {
             // \begin{multicols}{2}\tableofcontents\end{multicols} (TU Graz outline slide)
             let inner = s[head_end..body_end].trim();
-            let inner = inner.strip_prefix("{2}").unwrap_or(inner).trim();
-            (inner == "\\tableofcontents").then_some(Elem::Toc)
+            let (cols, rest) = match inner.strip_prefix('{').and_then(|r| r.split_once('}')) {
+                Some((n, rest)) => (n.trim().parse::<u8>().ok()?, rest.trim()),
+                None => return None,
+            };
+            (rest == "\\tableofcontents").then_some(Elem::Toc { cols })
         }
         _ => None,
     }
@@ -599,6 +628,14 @@ pub fn parse_deck(src: &str) -> Deck {
     deck.wide = Regex::new(r"(?m)^[^%\n]*\\documentclass\[[^\]]*aspectratio=169").unwrap().is_match(src);
     deck.tug = src.contains("tugraz2018") || src.contains("tugitemize");
     deck.booktabs = src.contains("{booktabs}");
+    let body_start = src.find("\\begin{document}").unwrap_or(0);
+    let re_toc = Regex::new(r"(?m)^[ \t]*\\(section|subsection)(\*?)(?:\[[^\]]*\])?\{([^{}]*)\}").unwrap();
+    for c in re_toc.captures_iter(&src[body_start..]) {
+        if &c[2] == "*" || c[3].trim().is_empty() {
+            continue;
+        }
+        deck.toc.push((if &c[1] == "section" { 1 } else { 2 }, c[3].trim().to_string()));
+    }
     // title metadata in the preamble
     let pre_end = src.find("\\begin{document}").unwrap_or(0);
     for cmd in ["title", "subtitle", "author", "institute", "date"] {
@@ -681,7 +718,10 @@ fn write_elems(out: &mut String, elems: &[Elem], ind: &str) {
             }
             Elem::Pause => out.push_str(&format!("{ind}\\pause\n")),
             Elem::TitlePage => out.push_str(&format!("{ind}\\maketitle\n")),
-            Elem::Toc => out.push_str(&format!("{ind}\\tableofcontents\n")),
+            Elem::Toc { cols } if *cols > 1 => {
+                out.push_str(&format!("{ind}\\begin{{multicols}}{{{cols}}}\n{ind}  \\tableofcontents\n{ind}\\end{{multicols}}\n"));
+            }
+            Elem::Toc { .. } => out.push_str(&format!("{ind}\\tableofcontents\n")),
             Elem::Math(m) => {
                 out.push_str(&format!("{ind}\\[\n"));
                 for l in m.trim().lines() {
@@ -710,6 +750,9 @@ fn write_elems(out: &mut String, elems: &[Elem], ind: &str) {
                         level -= 1;
                     }
                     let pad = format!("{ind}{}", "  ".repeat(level as usize * 2 + 1));
+                    if it.pause {
+                        out.push_str(&format!("{pad}\\pause\n"));
+                    }
                     let text = it.text.trim();
                     out.push_str(&format!("{pad}\\item{}{}{}\n", it.overlay, if text.is_empty() { "" } else { " " }, text));
                 }
@@ -999,7 +1042,7 @@ pub fn list_enter(body: &mut Vec<Elem>, path: &[usize], idx: usize, at: usize) -
     }
     let (head, tail) = split_chars(&it.text, at);
     items[idx].text = head.trim_end().to_string();
-    items.insert(idx + 1, Item { level: it.level, overlay: String::new(), text: tail.trim_start().to_string() });
+    items.insert(idx + 1, Item { level: it.level, overlay: String::new(), text: tail.trim_start().to_string(), pause: false });
     Some(ListResult::Item(idx + 1, 0))
 }
 
@@ -1115,7 +1158,7 @@ pub enum Template {
 
 pub fn new_slide(t: Template, tug: bool) -> Slide {
     let (ul, cols) = if tug { ("tugitemize", "tugcolumns") } else { ("itemize", "columns") };
-    let item = |s: &str| Item { level: 0, overlay: String::new(), text: s.into() };
+    let item = |s: &str| Item { level: 0, overlay: String::new(), text: s.into(), pause: false };
     let list = |items: Vec<Item>| Elem::List { env: ul.into(), numbered: false, step: false, items };
     let tr = |de: &'static str, en: &'static str| if crate::i18n::en() { en.to_string() } else { de.to_string() };
     match t {
@@ -1214,7 +1257,7 @@ mod tests {
         let Elem::List { items, step, .. } = &f1.slide.body[0] else { panic!("{:?}", f1.slide.body) };
         assert!(!step);
         assert_eq!(items.len(), 4);
-        assert_eq!(items[2], Item { level: 1, overlay: String::new(), text: "nested point".into() });
+        assert_eq!(items[2], Item { level: 1, overlay: String::new(), text: "nested point".into(), pause: false });
         assert_eq!(items[3].overlay, "<2->");
         assert_eq!(f1.slide.body[1], Elem::Raw("\\vspace{4mm}".into()));
         assert_eq!(f1.slide.body[2], Elem::Block { kind: BlockKind::Block, title: "Research Question".into(), body: vec![Elem::Text("How strongly does temperature shape the aroma?".into())] });
@@ -1268,7 +1311,7 @@ mod tests {
                 eprintln!("{:<14} {:?}", f.slide.title, f.slide.body.iter().map(|e| match e {
                     Elem::Text(_) => "Text", Elem::List { .. } => "List", Elem::Block { .. } => "Block", Elem::Image { .. } => "Image",
                     Elem::Columns { .. } => "Columns", Elem::Math(_) => "Math", Elem::Pause => "Pause", Elem::TitlePage => "Title",
-                    Elem::Toc => "Toc", Elem::Table { .. } => "Table", Elem::Raw(_) => "RAW" }).collect::<Vec<_>>());
+                    Elem::Toc { .. } => "Toc", Elem::Table { .. } => "Table", Elem::Raw(_) => "RAW" }).collect::<Vec<_>>());
             }
         }
     }
@@ -1337,12 +1380,12 @@ mod tests {
         // inserting into an empty slide
         let mut e: Vec<Elem> = vec![];
         assert_eq!(insert_after(&mut e, None, Elem::Pause), vec![0]);
-        assert_eq!(insert_after(&mut e, Some(&[7]), Elem::Toc), vec![1]);
+        assert_eq!(insert_after(&mut e, Some(&[7]), Elem::Toc { cols: 1 }), vec![1]);
     }
 
     #[test]
     fn list_ops() {
-        let it = |l: u8, t: &str| Item { level: l, overlay: String::new(), text: t.into() };
+        let it = |l: u8, t: &str| Item { level: l, overlay: String::new(), text: t.into(), pause: false };
         let list = |items: Vec<Item>| Elem::List { env: "itemize".into(), numbered: false, step: false, items };
         // split
         let mut b = vec![list(vec![it(0, "eins zwei")])];
@@ -1367,5 +1410,63 @@ mod tests {
         assert!(!list_indent(&mut b, &[0], 0, 1));
         assert!(list_indent(&mut b, &[0], 1, 1));
         assert!(!list_indent(&mut b, &[0], 1, 1));
+    }
+}
+#[cfg(test)]
+mod pause_toc_tests {
+    use super::*;
+
+    fn one(body: &str) -> Slide {
+        let src = format!("\\begin{{document}}\n\\begin{{frame}}{{T}}\n{body}\n\\end{{frame}}\n\\end{{document}}\n");
+        parse_deck(&src).frames[0].slide.clone()
+    }
+
+    fn round_trip(s: &Slide) {
+        let w = write_slide(s);
+        let again = parse_deck(&format!("\\begin{{document}}\n{w}\n\\end{{document}}")).frames[0].slide.clone();
+        assert_eq!(&again, s, "\n{w}");
+    }
+
+    #[test]
+    fn nested_list_with_pauses() {
+        let body = "  \\begin{tugenumerate}\n    \\item First item\n      \\begin{tugenumerate}\n        \\item First subitem\n          \\begin{tugenumerate}\n            \\item First \n            \\item Second\n          \\end{tugenumerate}\n      \\end{tugenumerate}\n      \\pause\n    \\item Second item\n      \\pause\n    \\item Third item\n  \\end{tugenumerate}";
+        let s = one(body);
+        let Elem::List { items, numbered, .. } = &s.body[0] else { panic!("{:?}", s.body) };
+        assert!(*numbered);
+        let v: Vec<(u8, bool, &str)> = items.iter().map(|i| (i.level, i.pause, i.text.as_str())).collect();
+        assert_eq!(v, vec![(0, false, "First item"), (1, false, "First subitem"), (2, false, "First"), (2, false, "Second"), (0, true, "Second item"), (0, true, "Third item")]);
+        round_trip(&s);
+        let w = write_slide(&s);
+        assert!(w.contains("    \\pause\n    \\item Second item"), "{w}");
+        // a trailing \pause in a list cannot be represented → raw
+        assert!(matches!(one("\\begin{itemize}\n\\item a\n\\pause\n\\end{itemize}").body[0], Elem::Raw(_)));
+    }
+
+    #[test]
+    fn toc_and_centering() {
+        let s = one("  \\begin{multicols}{2}\n    \\tableofcontents\n  \\end{multicols}");
+        assert_eq!(s.body, vec![Elem::Toc { cols: 2 }]);
+        round_trip(&s);
+        let s = one("  \\tableofcontents\n\n  es ist perfekt");
+        assert_eq!(s.body[0], Elem::Toc { cols: 1 });
+        let s = one("  \\centering\n  \\Large Questions?");
+        assert_eq!(s.body, vec![Elem::Text("\\centering \\Large Questions?".into())]);
+        round_trip(&s);
+        let d = parse_deck("\\begin{document}\n\\section{A}\n\\subsection{A1}\n\\section*{}\n\\section{B}\n\\begin{frame}x\\end{frame}\\end{document}");
+        assert_eq!(d.toc, vec![(1, "A".into()), (2, "A1".into()), (1, "B".into())]);
+    }
+}
+
+#[cfg(test)]
+mod user_deck_probe {
+    #[test]
+    #[ignore]
+    fn probe() {
+        let p = std::env::var("PROBE").unwrap();
+        let src = std::fs::read_to_string(p).unwrap();
+        let d = super::parse_deck(&src);
+        for f in &d.frames {
+            eprintln!("{:?} section={:?} {:?}", f.slide.title, f.section, f.slide.body.iter().map(|e| format!("{e:?}").chars().take(60).collect::<String>()).collect::<Vec<_>>());
+        }
     }
 }
