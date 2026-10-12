@@ -12,6 +12,8 @@ pub struct ProjectConfig {
     pub engine: String,
     pub slides_engine: String,
     pub talk_minutes: u32,
+    /// Icon of the project (a glyph of the icon font).
+    pub icon: String,
 }
 
 impl Default for ProjectConfig {
@@ -22,6 +24,7 @@ impl Default for ProjectConfig {
             slides_main: "praesentation/folien.tex".into(),
             engine: "pdflatex".into(),
             slides_engine: "pdflatex".into(),
+            icon: crate::icons::GRADUATION.into(),
             talk_minutes: 20,
         }
     }
@@ -34,6 +37,66 @@ pub struct Project {
 
 /// New projects: official TU Graz thesis template (KOMA, by Karl Voit et al., CC BY-SA 3.0)
 /// and TU Graz Beamer theme 2018 – filled with placeholder content.
+/// Which files a new project starts with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TemplateKind {
+    /// Official TU Graz thesis template + TU Graz beamer theme
+    #[default]
+    TuGraz,
+    /// A lean KOMA-Script report with one chapter and plain beamer slides
+    Blank,
+}
+
+/// Icons to choose from for a project.
+pub const PROJECT_ICONS: &[&str] = &[
+    crate::icons::GRADUATION,
+    crate::icons::BOOK,
+    "\u{f0c3}", // flask
+    "\u{f0eb}", // light bulb
+    crate::icons::CODE,
+    "\u{f1ec}", // calculator
+    "\u{f0fc}", // beer
+    "\u{f06c}", // leaf
+    crate::icons::GLOBE,
+    "\u{f135}", // rocket
+    "\u{f004}", // heart
+    crate::icons::STAR,
+    "\u{f001}", // music
+    "\u{f030}", // camera
+    "\u{f0fa}", // medkit
+    "\u{f24e}", // balance
+    "\u{f1b0}", // paw
+    crate::icons::CUBE,
+];
+
+/// Blank project: lean KOMA report + plain beamer slides (German or English placeholders).
+fn blank_files(en: bool) -> Vec<(&'static str, String)> {
+    let (title, name, chap, chap_file, intro, slide_title, point, pres) = if en {
+        ("Title of the thesis", "Your Name", "Introduction", "chapters/introduction", "Your thesis starts here.", "First slide", "First point", "Title of the presentation")
+    } else {
+        ("Titel der Arbeit", "Dein Name", "Einleitung", "kapitel/einleitung", "Hier beginnt deine Arbeit.", "Erste Folie", "Erster Punkt", "Titel der Präsentation")
+    };
+    let lang = if en { "english" } else { "ngerman" };
+    vec![
+        (
+            "main.tex",
+            format!(
+                "\\documentclass[11pt,a4paper]{{scrreprt}}\n\\usepackage[utf8]{{inputenc}}\n\\usepackage[T1]{{fontenc}}\n\\IfFileExists{{{lang}.ldf}}{{\\usepackage[{lang}]{{babel}}}}{{\\usepackage[english]{{babel}}}}\n\\usepackage{{lmodern}}\n\\usepackage{{microtype}}\n\\usepackage{{graphicx}}\n\\usepackage{{booktabs}}\n\\usepackage{{amsmath}}\n\\usepackage[hidelinks]{{hyperref}}\n\\usepackage[backend=biber,style=authoryear]{{biblatex}}\n\\addbibresource{{references.bib}}\n\\graphicspath{{{{figures/}}}}\n\n\\title{{{title}}}\n\\author{{{name}}}\n\\date{{\\today}}\n\n\\begin{{document}}\n\\maketitle\n\\tableofcontents\n\n\\include{{{chap_file}}}\n\n\\printbibliography\n\\end{{document}}\n"
+            ),
+        ),
+        (if en { "chapters/introduction.tex" } else { "kapitel/einleitung.tex" }, format!("\\chapter{{{chap}}}\n\\label{{ch:{}}}\n\n{intro}\n", chap.to_lowercase())),
+        ("references.bib", "% Literatur – am bequemsten über den Bibliothek-Tab hinzufügen\n".to_string()),
+        ("figures/.keep", String::new()),
+        ("papers/.keep", String::new()),
+        (
+            "praesentation/folien.tex",
+            format!(
+                "\\documentclass[aspectratio=169]{{beamer}}\n\\usepackage[utf8]{{inputenc}}\n\\usepackage[T1]{{fontenc}}\n\\usepackage{{booktabs}}\n\\setbeamertemplate{{navigation symbols}}{{}}\n\\setbeamercovered{{invisible}}\n\n\\title{{{pres}}}\n\\author{{{name}}}\n\\date{{\\today}}\n\n\\begin{{document}}\n\n\\begin{{frame}}\n  \\titlepage\n\\end{{frame}}\n\n\\begin{{frame}}{{{slide_title}}}\n  \\begin{{itemize}}\n    \\item {point}\n  \\end{{itemize}}\n\\end{{frame}}\n\n\\end{{document}}\n"
+            ),
+        ),
+    ]
+}
+
 const TEMPLATE: &[(&str, &[u8])] = &[
     ("content/abstract.tex", include_bytes!("../templates/masterarbeit/content/abstract.tex")),
     ("content/acknowledgement.tex", include_bytes!("../templates/masterarbeit/content/acknowledgement.tex")),
@@ -74,6 +137,16 @@ pub fn projects_dir() -> PathBuf {
     dirs::document_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Documents")).join("nEdit-Projekte")
 }
 
+/// Icon of a project folder (from its config; default graduation cap).
+pub fn project_icon(root: &Path) -> String {
+    std::fs::read_to_string(root.join(".nedit/project.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<ProjectConfig>(&s).ok())
+        .map(|c| c.icon)
+        .filter(|i| !i.is_empty())
+        .unwrap_or_else(|| crate::icons::GRADUATION.to_string())
+}
+
 pub fn list_projects() -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(projects_dir())
         .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.join(".nedit/project.json").exists() || p.join("main.tex").exists()).collect())
@@ -95,13 +168,19 @@ impl Project {
     }
 
     pub fn create(name: &str, author: &str) -> std::io::Result<Self> {
+        Self::create_with(name, author, TemplateKind::TuGraz, crate::icons::GRADUATION)
+    }
+
+    pub fn create_with(name: &str, author: &str, kind: TemplateKind, icon: &str) -> std::io::Result<Self> {
         let slug: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
         let root = projects_dir().join(slug);
         if root.join(".nedit/project.json").exists() {
             return Project::open(&root);
         }
         std::fs::create_dir_all(root.join(".nedit"))?;
-        for (rel, content) in TEMPLATE {
+        let blank: Vec<(&str, String)> = if kind == TemplateKind::Blank { blank_files(crate::i18n::en()) } else { vec![] };
+        let files: Vec<(&str, &[u8])> = if kind == TemplateKind::Blank { blank.iter().map(|(r, c)| (*r, c.as_bytes())).collect() } else { TEMPLATE.to_vec() };
+        for (rel, content) in files {
             let p = root.join(rel);
             if let Some(d) = p.parent() {
                 std::fs::create_dir_all(d)?;
@@ -109,13 +188,13 @@ impl Project {
             if !p.exists() {
                 // text files get the author name filled in, binary files are copied as they are
                 match std::str::from_utf8(content) {
-                    Ok(text) if !author.is_empty() => std::fs::write(&p, text.replace("Your Name", author))?,
+                    Ok(text) if !author.is_empty() => std::fs::write(&p, text.replace("Your Name", author).replace("Dein Name", author))?,
                     _ => std::fs::write(&p, content)?,
                 }
             }
         }
         std::fs::write(root.join(".gitignore"), ".nedit/build/\n")?;
-        let p = Project { root, config: ProjectConfig { name: name.to_string(), ..Default::default() } };
+        let p = Project { root, config: ProjectConfig { name: name.to_string(), icon: icon.to_string(), ..Default::default() } };
         p.save_config()?;
         Ok(p)
     }
@@ -324,6 +403,26 @@ mod tests {
         let p = Project::create("Masterarbeit", "Erika Muster").unwrap();
         let main = std::fs::read_to_string(p.root.join("main.tex")).unwrap();
         assert!(main.contains("Erika Muster"));
+        for (main, out) in [("main.tex", ".nedit/build/arbeit"), ("praesentation/folien.tex", ".nedit/build/praesentation")] {
+            let spec = crate::compile::CompileSpec { root: p.root.clone(), main: main.into(), outdir: out.into(), engine: "pdflatex".into() };
+            let r = crate::compile::run_for_test(&spec);
+            let errors: Vec<_> = r.issues.iter().filter(|i| i.level == crate::compile::Level::Error).collect();
+            assert!(errors.is_empty(), "{main}: {errors:?}");
+            assert!(r.pdf.is_some(), "{main}: no PDF");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore = "needs TeX Live with biber"]
+    fn blank_template_compiles() {
+        let dir = std::env::temp_dir().join(format!("nedit-blank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: test-only, single-threaded use of the env var
+        unsafe { std::env::set_var("NEDIT_PROJECTS", &dir) };
+        let p = Project::create_with("Leer", "Erika Muster", TemplateKind::Blank, crate::icons::BOOK).unwrap();
+        assert_eq!(p.config.icon, crate::icons::BOOK);
+        assert!(std::fs::read_to_string(p.root.join("main.tex")).unwrap().contains("Erika Muster"));
         for (main, out) in [("main.tex", ".nedit/build/arbeit"), ("praesentation/folien.tex", ".nedit/build/praesentation")] {
             let spec = crate::compile::CompileSpec { root: p.root.clone(), main: main.into(), outdir: out.into(), engine: "pdflatex".into() };
             let r = crate::compile::run_for_test(&spec);

@@ -331,16 +331,32 @@ impl App {
         }
         let screen = ctx.content_rect();
         let size = vec2((screen.width() - 80.0).clamp(560.0, 980.0), (screen.height() - 90.0).clamp(420.0, 680.0));
-        let modal = egui::Modal::new(Id::new("settings-window"))
-            .backdrop_color(with_alpha(Color32::BLACK, 120))
-            .frame(
-                egui::Frame::new()
-                    .fill(pal.base)
-                    .stroke(Stroke::new(1.0, with_alpha(pal.border, 160)))
-                    .corner_radius(16)
-                    .shadow(egui::Shadow { offset: [0, 18], blur: 48, spread: 0, color: with_alpha(Color32::BLACK, 130) }),
-            )
+        // a real window: a dimmed backdrop (click closes) and above it a window that starts
+        // centered and can be dragged by any free spot (title, navigation, margins)
+        let backdrop = egui::Area::new(Id::new("settings-backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .interactable(true)
             .show(ctx, |ui| {
+                let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter().rect_filled(r, 0.0, with_alpha(Color32::BLACK, 120));
+                resp
+            })
+            .inner;
+        let win = egui::Area::new(Id::new("settings-window-area"))
+            .order(egui::Order::Foreground)
+            .movable(true)
+            .constrain(true)
+            .default_pos(screen.center() - size / 2.0);
+        // keep the window above its backdrop
+        ctx.move_to_top(win.layer());
+        let frame = egui::Frame::new()
+            .fill(pal.base)
+            .stroke(Stroke::new(1.0, with_alpha(pal.border, 160)))
+            .corner_radius(16)
+            .shadow(egui::Shadow { offset: [0, 18], blur: 48, spread: 0, color: with_alpha(Color32::BLACK, 130) });
+        let shown = win
+            .show(ctx, |ui| frame.show(ui, |ui| {
                 ui.set_min_size(size);
                 ui.set_max_size(size);
                 let full = ui.max_rect();
@@ -404,8 +420,9 @@ impl App {
                     }
                     ui.add_space(16.0);
                 });
-            });
-        if modal.should_close() {
+            }));
+        let _ = shown;
+        if backdrop.clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.settings_open = false;
         }
     }

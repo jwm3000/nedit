@@ -160,7 +160,7 @@ pub struct ShelfUi {
 
 pub enum Dialog {
     Delete { rel: String },
-    NewProject { name: String },
+    NewProject { name: String, kind: project::TemplateKind, icon: String },
     GitRestore { hash: String, path: String },
     /// Revert changes of these paths (files or folders, "" = everything) to the last commit.
     GitRevert { paths: Vec<String> },
@@ -1331,6 +1331,35 @@ impl eframe::App for App {
                         }
                         self.debug_typed += 1;
                     }
+                    if name.contains("setdrag") && self.debug_typed < 17030 {
+                        // drag the settings window by its title
+                        if self.debug_typed < 17000 {
+                            self.debug_typed = 17000;
+                        }
+                        let k = self.debug_typed - 17000;
+                        let r = ctx.memory(|m| m.area_rect(egui::Id::new("settings-window-area")));
+                        let fixed = egui::Id::new("dbg-set-fixed");
+                        if k == 2 {
+                            if let Some(r) = r {
+                                ctx.data_mut(|d| d.insert_temp(fixed, r));
+                                eprintln!("SETDRAG before {:?}", r.min);
+                            }
+                        }
+                        let r0: Option<egui::Rect> = ctx.data(|d| d.get_temp(fixed));
+                        if let Some(r0) = r0 {
+                            let start = r0.min + egui::vec2(60.0, 30.0);
+                            let press = |p: egui::Pos2, down: bool| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: down, modifiers: egui::Modifiers::NONE };
+                            match k {
+                                3 => raw.events.push(egui::Event::PointerMoved(start)),
+                                4 => raw.events.push(press(start, true)),
+                                5..=14 => raw.events.push(egui::Event::PointerMoved(start + egui::vec2((k - 4) as f32 * -20.0, (k - 4) as f32 * 8.0))),
+                                15 => raw.events.push(press(start + egui::vec2(-200.0, 80.0), false)),
+                                18 => eprintln!("SETDRAG after {:?}", r.map(|r| r.min)),
+                                _ => {}
+                            }
+                        }
+                        self.debug_typed += 1;
+                    }
                     if name.contains("imgtest") && self.debug_typed < 16060 {
                         if self.debug_typed < 16000 {
                             self.debug_typed = 16000;
@@ -1746,14 +1775,20 @@ impl App {
                     ui.add_space(14.0);
                     // project switcher
                     let name = self.project.config.name.clone();
-                    let resp = ui.add(egui::Button::new(egui::RichText::new(format!("{}   {name}   {}", ic::GRADUATION, ic::CHEVRON_DOWN)).font(widgets::ui_font(13.5)).color(pal.text)).fill(pal.surface).corner_radius(8));
-                    egui::Popup::menu(&resp).show(|ui| {
+                    let picon = if self.project.config.icon.is_empty() { ic::GRADUATION.to_string() } else { self.project.config.icon.clone() };
+                    let resp = ui.add(egui::Button::new(egui::RichText::new(format!("{picon}   {name}   {}", ic::CHEVRON_DOWN)).font(widgets::ui_font(13.5)).color(pal.text)).fill(pal.surface).corner_radius(8));
+                    let mut pm = egui::Popup::menu(&resp);
+                    if std::env::var("NEDIT_SHOT").is_ok_and(|v| v.split(',').nth(self.shot_step).is_some_and(|t| t.contains("projmenu"))) {
+                        pm = pm.open_memory(egui::SetOpenCommand::Bool(true));
+                    }
+                    pm.show(|ui| {
                         ui.set_min_width(240.0);
                         widgets::section_label(ui, tr!("Projekte" | "Projects"), pal);
                         for p in project::list_projects() {
                             let n = p.file_name().unwrap().to_string_lossy().to_string();
                             let cur = p == self.project.root;
-                            if ui.selectable_label(cur, format!("{}  {n}", if cur { ic::CHECK } else { ic::FOLDER })).clicked() && !cur {
+                            let pi = project::project_icon(&p);
+                            if ui.selectable_label(cur, format!("{pi}   {n}{}", if cur { format!("   {}", ic::CHECK) } else { String::new() })).clicked() && !cur {
                                 self.save_all();
                                 if let Ok(pr) = Project::open(&p) {
                                     self.project = pr;
@@ -1764,8 +1799,17 @@ impl App {
                             }
                         }
                         ui.separator();
+                        ui.menu_button(format!("{}  {}", picon, tr!("Icon ändern" | "Change icon")), |ui| {
+                            let mut icon = picon.clone();
+                            icon_grid(ui, pal, &mut icon);
+                            if icon != picon {
+                                self.project.config.icon = icon;
+                                let _ = self.project.save_config();
+                                ui.close();
+                            }
+                        });
                         if ui.button(trf!("{}  Neues Projekt …" | "{}  New project …", ic::PLUS)).clicked() {
-                            self.dialog = Some(Dialog::NewProject { name: String::new() });
+                            self.dialog = Some(Dialog::NewProject { name: String::new(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string() });
                         }
                         if ui.button(trf!("{}  Ordner öffnen" | "{}  Open folder", ic::FOLDER_OPEN)).clicked() {
                             crate::platform::open_external(&self.project.root);
@@ -2113,22 +2157,49 @@ impl App {
                         });
                     }
                 }
-                Dialog::NewProject { name } => {
+                Dialog::NewProject { name, kind, icon } => {
+                    ui.set_width(460.0);
                     ui.label(egui::RichText::new(tr!("Neues Projekt" | "New project")).font(widgets::display_font(20.0)).color(pal.bright));
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(tr!("Mit Vorlage für Arbeit, TU-Graz-Präsentation und Bibliothek." | "With template for thesis, TU Graz presentation and library.")).color(pal.dim));
                     ui.add_space(8.0);
                     let r = ui.add(egui::TextEdit::singleline(name).hint_text(tr!("Projektname" | "Project name")).desired_width(f32::INFINITY));
                     r.request_focus();
-                    ui.add_space(10.0);
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new(tr!("VORLAGE" | "TEMPLATE")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        for (k, ico, title, desc) in [
+                            (project::TemplateKind::TuGraz, ic::UNIVERSITY, tr!("TU Graz – Masterarbeit" | "TU Graz – Master's thesis"), tr!("Offizielle Vorlage: Titelblatt, Erklärung, Abstract, biblatex – dazu das TU-Graz-Beamer-Theme" | "Official template: title page, affidavit, abstract, biblatex – plus the TU Graz beamer theme")),
+                            (project::TemplateKind::Blank, ic::FILE_TEXT, tr!("Leer" | "Blank"), tr!("Schlanke Arbeit mit einem Kapitel, Literaturverzeichnis und einfachen Folien" | "Lean thesis with one chapter, bibliography and plain slides")),
+                        ] {
+                            let sel = *kind == k;
+                            let (r, resp) = ui.allocate_exact_size(vec2(224.0, 104.0), egui::Sense::click());
+                            let hov = resp.hovered();
+                            ui.painter().rect_filled(r, 10.0, if sel { with_alpha(pal.accent, 30) } else if hov { with_alpha(pal.text, 10) } else { mix(pal.surface, pal.base, 0.4) });
+                            ui.painter().rect_stroke(r, 10.0, Stroke::new(if sel { 2.0 } else { 1.0 }, if sel { pal.accent } else { with_alpha(pal.border, 150) }), egui::StrokeKind::Inside);
+                            ui.painter().text(r.min + vec2(16.0, 22.0), Align2::LEFT_CENTER, ico, widgets::ui_font(16.0), if sel { pal.accent } else { pal.subtext });
+                            ui.painter().text(r.min + vec2(40.0, 22.0), Align2::LEFT_CENTER, title, widgets::bold_font(13.5), pal.bright);
+                            let g = ui.painter().layout(desc.to_string(), widgets::ui_font(11.5), pal.dim, r.width() - 28.0);
+                            ui.painter().galley(r.min + vec2(14.0, 40.0), g, pal.dim);
+                            if resp.clicked() {
+                                *kind = k;
+                            }
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new(tr!("ICON" | "ICON")).font(widgets::ui_font(10.5)).color(pal.dim).extra_letter_spacing(1.2));
+                    ui.add_space(4.0);
+                    icon_grid(ui, pal, icon);
+                    ui.add_space(12.0);
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
                         if (widgets::button(ui, ic::PLUS, tr!("Erstellen" | "Create"), pal, BtnKind::Primary).clicked() || enter) && !name.trim().is_empty() {
                             let name = name.trim().to_string();
+                            let kind_v = *kind;
+                            let icon_v = icon.clone();
                             let ctx2 = ctx.clone();
                             action = Some(Box::new(move |app: &mut App| {
                                 app.save_all();
-                                if let Ok(p) = Project::create(&name, "") {
+                                if let Ok(p) = Project::create_with(&name, "", kind_v, &icon_v) {
                                     app.project = p;
                                     app.shelf = Shelf::load(&app.project.root);
                                     app.cites_rev = 0;
@@ -2469,6 +2540,9 @@ impl App {
                 }
             }
         }
+        if name.contains("newproj") && self.dialog.is_none() {
+            self.dialog = Some(Dialog::NewProject { name: "Bachelorarbeit".into(), kind: project::TemplateKind::TuGraz, icon: ic::GRADUATION.to_string() });
+        }
         if name.contains("svis") {
             self.settings.slides_visual = true;
         }
@@ -2563,4 +2637,25 @@ fn load_figure(ctx: &egui::Context, f: &std::path::Path) -> Option<egui::Texture
     let size = [img.width() as usize, img.height() as usize];
     let ci = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
     Some(ctx.load_texture(format!("fig-{}", f.display()), ci, egui::TextureOptions::LINEAR))
+}
+
+/// Grid of project icons; the selected one is highlighted.
+fn icon_grid(ui: &mut egui::Ui, pal: &Palette, icon: &mut String) {
+    let per_row = 9;
+    for row in crate::project::PROJECT_ICONS.chunks(per_row) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for ico in row {
+                let sel = icon == ico;
+                let (r, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::click());
+                let hov = resp.hovered();
+                ui.painter().rect_filled(r, 9.0, if sel { pal.accent } else if hov { with_alpha(pal.text, 18) } else { with_alpha(pal.text, 8) });
+                ui.painter().text(r.center(), Align2::CENTER_CENTER, *ico, widgets::ui_font(17.0), if sel { pal.on_accent } else { pal.subtext });
+                if resp.clicked() {
+                    *icon = ico.to_string();
+                }
+            }
+        });
+        ui.add_space(6.0);
+    }
 }

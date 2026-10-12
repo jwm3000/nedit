@@ -55,6 +55,7 @@ pub enum Elem {
         path: String,
         /// fraction of \textheight (0.1 … 1.0)
         height: f32,
+        align: ImgAlign,
     },
     Columns {
         env: String,
@@ -76,6 +77,18 @@ pub enum Elem {
     /// `\tableofcontents`, optionally in `multicols` (cols = 2 …)
     Toc { cols: u8 },
     Raw(String),
+}
+
+/// Horizontal position of an image on a slide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ImgAlign {
+    /// plain `\includegraphics`
+    Left,
+    /// `\centering` before it
+    #[default]
+    Center,
+    /// `\hfill\includegraphics`
+    Right,
 }
 
 /// Horizontal lines of a table.
@@ -391,7 +404,7 @@ pub fn parse_body(s: &str) -> Vec<Elem> {
                     // a lone \centering before an image belongs to the image
                     let next = skip_ws(s, line_end);
                     let nl = s[next..].find('\n').map_or(s.len(), |p| next + p);
-                    if let Some(img) = image_from(&s[next..nl]) {
+                    if let Some(img) = image_from(&s[next..nl], true) {
                         simple(img, &mut par, &mut out);
                         i = nl;
                         continue;
@@ -399,7 +412,7 @@ pub fn parse_body(s: &str) -> Vec<Elem> {
                 }
                 _ => {}
             }
-            if let Some(img) = image_from(line) {
+            if let Some(img) = image_from(line, false) {
                 simple(img, &mut par, &mut out);
                 i = line_end;
                 continue;
@@ -450,8 +463,17 @@ pub fn parse_body(s: &str) -> Vec<Elem> {
     merged
 }
 
-fn image_from(line: &str) -> Option<Elem> {
-    let m = RE_GFX.captures(line.trim())?;
+fn image_from(line: &str, centered: bool) -> Option<Elem> {
+    let mut l = line.trim();
+    let mut align = if centered { ImgAlign::Center } else { ImgAlign::Left };
+    if let Some(r) = l.strip_prefix("\\hfill") {
+        if centered {
+            return None;
+        }
+        l = r.trim_start();
+        align = ImgAlign::Right;
+    }
+    let m = RE_GFX.captures(l)?;
     let opts = m.get(1).map_or("", |x| x.as_str());
     let height = Regex::new(r"height=([0-9.]+)\\textheight").unwrap().captures(opts).and_then(|h| h[1].parse().ok());
     let height = match (height, opts.is_empty()) {
@@ -459,7 +481,7 @@ fn image_from(line: &str) -> Option<Elem> {
         (None, true) => 0.6,
         (None, false) => return None, // other options (width=…, angle …): keep raw
     };
-    Some(Elem::Image { path: m[2].to_string(), height })
+    Some(Elem::Image { path: m[2].to_string(), height, align })
 }
 
 fn parse_env(env: &str, s: &str, head_end: usize, body_end: usize) -> Option<Elem> {
@@ -540,7 +562,7 @@ fn parse_env(env: &str, s: &str, head_end: usize, body_end: usize) -> Option<Ele
                     _ => None,
                 };
             }
-            image_from(body)
+            image_from(body, true)
         }
         "tabular" => {
             let j = skip_sp(s, head_end);
@@ -729,8 +751,13 @@ fn write_elems(out: &mut String, elems: &[Elem], ind: &str) {
                 }
                 out.push_str(&format!("{ind}\\]\n"));
             }
-            Elem::Image { path, height } => {
-                out.push_str(&format!("{ind}\\centering\n{ind}\\includegraphics[height={}\\textheight]{{{path}}}\n", fmt_frac(*height)));
+            Elem::Image { path, height, align } => {
+                let gfx = format!("\\includegraphics[height={}\\textheight]{{{path}}}", fmt_frac(*height));
+                match align {
+                    ImgAlign::Center => out.push_str(&format!("{ind}\\centering\n{ind}{gfx}\n")),
+                    ImgAlign::Left => out.push_str(&format!("{ind}{gfx}\n")),
+                    ImgAlign::Right => out.push_str(&format!("{ind}\\hfill{gfx}\n")),
+                }
             }
             Elem::List { env, step, items, .. } => {
                 let opt = if *step { "[<+->]" } else { "" };
@@ -1168,7 +1195,7 @@ pub fn new_slide(t: Template, tug: bool) -> Slide {
             title: tr("Vergleich", "Comparison"),
             body: vec![Elem::Columns { env: cols.into(), cols: vec![vec![list(vec![item(&tr("Links", "Left"))])], vec![list(vec![item(&tr("Rechts", "Right"))])]] }],
         },
-        Template::Image => Slide { opts: String::new(), title: tr("Abbildung", "Figure"), body: vec![Elem::Image { path: String::new(), height: 0.6 }] },
+        Template::Image => Slide { opts: String::new(), title: tr("Abbildung", "Figure"), body: vec![Elem::Image { path: String::new(), height: 0.6, align: ImgAlign::Center }] },
         Template::Block => Slide {
             opts: String::new(),
             title: tr("Kernaussage", "Key message"),
@@ -1265,7 +1292,7 @@ mod tests {
         assert_eq!(cols.len(), 2);
         assert!(matches!(&cols[0][0], Elem::List { numbered: true, step: true, .. }));
         assert_eq!(cols[1][0], Elem::Math("k(T) = A e^{-E_a/RT}".into()));
-        assert_eq!(d.frames[3].slide.body, vec![Elem::Image { path: "figures/photo".into(), height: 0.6 }, Elem::Pause, Elem::Text("Some text after a pause.".into())]);
+        assert_eq!(d.frames[3].slide.body, vec![Elem::Image { path: "figures/photo".into(), height: 0.6, align: ImgAlign::Center }, Elem::Pause, Elem::Text("Some text after a pause.".into())]);
         assert!(matches!(&d.frames[4].slide.body[0], Elem::Raw(r) if r.contains("tikzpicture")));
         assert_eq!(d.frames[4].slide.opts, "c");
     }
@@ -1440,6 +1467,15 @@ mod pause_toc_tests {
         assert!(w.contains("    \\pause\n    \\item Second item"), "{w}");
         // a trailing \pause in a list cannot be represented → raw
         assert!(matches!(one("\\begin{itemize}\n\\item a\n\\pause\n\\end{itemize}").body[0], Elem::Raw(_)));
+    }
+
+    #[test]
+    fn image_alignment() {
+        for (src, a) in [("\\centering\n\\includegraphics{x}", ImgAlign::Center), ("\\includegraphics{x}", ImgAlign::Left), ("\\hfill\\includegraphics{x}", ImgAlign::Right)] {
+            let s = one(src);
+            assert!(matches!(&s.body[0], Elem::Image { align, .. } if *align == a), "{src}: {:?}", s.body);
+            round_trip(&s);
+        }
     }
 
     #[test]

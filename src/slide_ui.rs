@@ -193,6 +193,7 @@ enum Op {
     InsertAfter(Option<Vec<usize>>, NewKind),
     PickImage(Vec<usize>),
     ImageSize(Vec<usize>, f32),
+    ImageAlign(Vec<usize>, slides::ImgAlign),
     Meta(&'static str, String),
     Table(Vec<usize>, TableOp),
     ListNumbered(Vec<usize>),
@@ -242,7 +243,7 @@ fn new_elem(kind: NewKind, tug: bool, booktabs: bool) -> Elem {
         NewKind::Bullets => Elem::List { env: ul.into(), numbered: false, step: false, items: vec![item()] },
         NewKind::Numbered => Elem::List { env: ol.into(), numbered: true, step: false, items: vec![item()] },
         NewKind::Block => Elem::Block { kind: BlockKind::Block, title: tr!("Merke" | "Note").into(), body: vec![Elem::Text(String::new())] },
-        NewKind::Image => Elem::Image { path: String::new(), height: 0.6 },
+        NewKind::Image => Elem::Image { path: String::new(), height: 0.6, align: slides::ImgAlign::Center },
         NewKind::Columns => Elem::Columns { env: cols.into(), cols: vec![vec![Elem::Text(String::new())], vec![Elem::Text(String::new())]] },
         NewKind::Table => slides::new_table(booktabs),
         NewKind::Math => Elem::Math(String::new()),
@@ -946,7 +947,8 @@ fn elem(ui: &mut Ui, cx: &mut Cx, e: &mut Elem, path: &[usize], width: f32) {
                 ]),
             );
         }
-        Elem::Image { path: p, height } => {
+        Elem::Image { path: p, height, align } => {
+            let align = *align;
             let (dir, root) = cx.dirs.clone();
             let max_h = 300.0 * k * *height;
             let tex = load_image(ui.ctx(), cx.ed, &dir, &root, p);
@@ -956,12 +958,12 @@ fn elem(ui: &mut Ui, cx: &mut Cx, e: &mut Elem, path: &[usize], width: f32) {
                     let h = max_h.min(width * s.y / s.x);
                     let w = h * s.x / s.y;
                     let (row, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
-                    let r = Rect::from_center_size(row.center(), vec2(w, h));
+                    let r = place(row, vec2(w, h), align);
                     ui.painter().image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 None => {
                     let (row, resp) = ui.allocate_exact_size(vec2(width, max_h.max(60.0 * k)), Sense::click());
-                    let r = Rect::from_center_size(row.center(), vec2((max_h * 1.5).min(width), row.height()));
+                    let r = place(row, vec2((max_h * 1.5).min(width), row.height()), align);
                     let hov = resp.hovered();
                     ui.painter().rect_filled(r, 6.0, if hov { Color32::from_gray(232) } else { Color32::from_gray(242) });
                     ui.painter().rect_stroke(r, 6.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
@@ -1254,7 +1256,17 @@ fn floating_toolbar(ctx: &egui::Context, cx: &mut Cx, slide: &Slide, path: &[usi
                                 }
                                 fsep(ui);
                             }
-                            Elem::Image { .. } => {
+                            Elem::Image { align, .. } => {
+                                for (a, icon, tip) in [
+                                    (slides::ImgAlign::Left, ic::ALIGN_LEFT, tr!("Linksbündig" | "Align left")),
+                                    (slides::ImgAlign::Center, ic::ALIGN_CENTER, tr!("Zentriert" | "Centered")),
+                                    (slides::ImgAlign::Right, ic::ALIGN_RIGHT, tr!("Rechtsbündig" | "Align right")),
+                                ] {
+                                    if fbtn(ui, icon, tip, *align == a) {
+                                        ops.push(Op::ImageAlign(p.clone(), a));
+                                    }
+                                }
+                                fsep(ui);
                                 if fbtn(ui, ic::IMAGE, tr!("Bild ersetzen" | "Replace image"), false) {
                                     ops.push(Op::PickImage(p.clone()));
                                 }
@@ -2323,6 +2335,12 @@ impl App {
                         structural = true;
                     }
                 }
+                Op::ImageAlign(p, a) => {
+                    if let Some(Elem::Image { align, .. }) = slides::elem_mut(&mut slide.body, &p) {
+                        *align = a;
+                        structural = true;
+                    }
+                }
                 Op::Meta(cmd, v) => meta_edits.push((cmd, v)),
                 Op::Table(p, top) => {
                     if let Some(Elem::Table { rows, header, spec, .. }) = slides::elem_mut(&mut slide.body, &p) {
@@ -2583,4 +2601,14 @@ fn roman(n: usize) -> String {
         }
     }
     s
+}
+
+/// Position a box of `size` inside `row` (left / centered / right).
+fn place(row: Rect, size: egui::Vec2, align: slides::ImgAlign) -> Rect {
+    let x = match align {
+        slides::ImgAlign::Left => row.min.x,
+        slides::ImgAlign::Center => row.center().x - size.x / 2.0,
+        slides::ImgAlign::Right => row.max.x - size.x,
+    };
+    Rect::from_min_size(pos2(x, row.center().y - size.y / 2.0), size)
 }

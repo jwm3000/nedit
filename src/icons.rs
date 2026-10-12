@@ -91,3 +91,4 @@ pub const MINUS: &str = "\u{f068}";
 pub const TEXT_HEIGHT: &str = "\u{f034}";
 pub const CODE_INLINE: &str = "\u{f121}";
 pub const PLUS_CIRCLE: &str = "\u{f055}";
+pub const ALIGN_RIGHT: &str = "\u{f038}";
