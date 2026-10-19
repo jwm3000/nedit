@@ -786,6 +786,12 @@ fn pdf_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     if w > 0 && widgets::badge(&mut c, &format!("{} {w}", ic::WARN), pal.yellow).interact(Sense::click()).clicked() {
         ws.show_logs = true;
     }
+    if !ws.fixes.is_empty() && !narrow {
+        let b = widgets::badge(&mut c, &trf!("{}  Vorschlag" | "{}  Suggestion", ic::MAGIC), pal.accent).interact(Sense::click());
+        if b.on_hover_text(&ws.fixes[0].title).clicked() {
+            ws.show_logs = true;
+        }
+    }
     let n = ws.viewer.page_count();
     c.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
@@ -822,7 +828,7 @@ fn pdf_toolbar(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
 fn pdf_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     pdf_toolbar(app, ui, pal, t);
     if app.ws(t).show_logs {
-        logs_view(app, ui, pal, t);
+        logs_view(app, ui, pal, t, now);
         return;
     }
     if app.ws(t).viewer.doc.is_none() {
@@ -851,8 +857,71 @@ fn pdf_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let _ = now;
 }
 
-fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
+/// A suggestion card above the error list. Returns true if its action should run.
+fn fix_card(ui: &mut Ui, pal: &Palette, fix: &crate::fixes::Fix, installing: bool) -> bool {
+    use crate::fixes::FixAction;
+    let mut run = false;
+    let col = pal.accent;
+    let resp = Frame::new()
+        .fill(mix(pal.surface, col, 0.10))
+        .stroke(Stroke::new(1.0, with_alpha(col, 120)))
+        .corner_radius(10)
+        .inner_margin(Margin { left: 16, right: 12, top: 12, bottom: 12 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                widgets::badge(ui, &trf!("{}  nEdit-Vorschlag" | "{}  nEdit suggestion", ic::MAGIC), col);
+                if fix.covers > 1 {
+                    ui.label(egui::RichText::new(trf!("erklärt {} Fehler" | "explains {} errors", fix.covers)).font(widgets::ui_font(11.5)).color(pal.subtext));
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(&fix.title).font(widgets::bold_font(14.0)).color(pal.bright));
+            ui.add_space(2.0);
+            // prose in the UI font, indented lines (code, commands, file lists) monospaced
+            for line in fix.detail.lines() {
+                if line.is_empty() {
+                    ui.add_space(4.0);
+                } else if line.starts_with("  ") {
+                    ui.label(egui::RichText::new(line.trim_start()).font(widgets::mono_font(12.0)).color(mix(col, pal.text, 0.4)));
+                } else {
+                    ui.label(egui::RichText::new(line).font(widgets::ui_font(12.5)).color(pal.text));
+                }
+            }
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| match &fix.action {
+                FixAction::Preamble { .. } | FixAction::Replace { .. } => {
+                    if widgets::button(ui, ic::MAGIC, tr!("Beheben & neu kompilieren" | "Fix & recompile"), pal, BtnKind::Primary).clicked() {
+                        run = true;
+                    }
+                }
+                FixAction::Install { command } => {
+                    if installing {
+                        let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                        widgets::draw_spinner(ui, r.center(), 7.0, col);
+                        ui.label(egui::RichText::new(tr!("Installation läuft im Terminal …" | "Installing in a terminal …")).color(pal.subtext));
+                    } else if widgets::button(ui, ic::TERMINAL, tr!("Im Terminal installieren" | "Install in a terminal"), pal, BtnKind::Primary).on_hover_text(command).clicked() {
+                        run = true;
+                    }
+                    if widgets::button(ui, ic::COPY, tr!("Befehl kopieren" | "Copy command"), pal, BtnKind::Ghost).clicked() {
+                        ui.ctx().copy_text(command.clone());
+                    }
+                }
+                FixAction::None => {}
+            });
+        })
+        .response;
+    let r = resp.rect;
+    ui.painter().rect_filled(Rect::from_min_size(r.min + vec2(0.0, 12.0), vec2(3.0, r.height() - 24.0)), 2.0, col);
+    ui.add_space(8.0);
+    run
+}
+
+fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let mut jump: Option<(String, usize)> = None;
+    let mut run_fix: Option<crate::fixes::Fix> = None;
+    let mut open_packages = false;
+    let installing = app.tex_install.is_some();
     let ws = app.ws_mut(t);
     Frame::new().inner_margin(Margin::same(14)).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -860,6 +929,9 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::chip(ui, ic::TERMINAL, tr!("Rohes Log" | "Raw log"), ws.show_raw, pal.accent, pal).clicked() {
                     ws.show_raw = !ws.show_raw;
+                }
+                if widgets::chip(ui, ic::CUBE, tr!("TeX-Pakete" | "TeX packages"), false, pal.accent, pal).on_hover_text(tr!("TeX-Pakete suchen und installieren" | "Search and install TeX packages")).clicked() {
+                    open_packages = true;
                 }
             });
         });
@@ -869,6 +941,15 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
                 ui.label(egui::RichText::new(&ws.raw_log).font(widgets::mono_font(11.5)).color(pal.subtext));
             });
             return;
+        }
+        if !ws.fixes.is_empty() {
+            egui::ScrollArea::vertical().id_salt("fixes").max_height(ui.available_height() * 0.6).auto_shrink([false, true]).show(ui, |ui| {
+                for f in &ws.fixes {
+                    if fix_card(ui, pal, f, installing) {
+                        run_fix = Some(f.clone());
+                    }
+                }
+            });
         }
         if ws.issues.is_empty() {
             ui.add_space(30.0);
@@ -924,6 +1005,14 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
     });
     if let Some((f, l)) = jump {
         app.jump_to(&f, l, t);
+    }
+    if let Some(f) = run_fix {
+        let ctx = ui.ctx().clone();
+        app.apply_fix(t, f, &ctx, now);
+    }
+    if open_packages {
+        crate::texpkg::preload(ui.ctx());
+        app.dialog = Some(crate::app::Dialog::TexPackages { query: String::new() });
     }
 }
 
@@ -982,7 +1071,7 @@ fn filmstrip(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64) {
 fn stage(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64) {
     pdf_toolbar(app, ui, pal, Tab::Slides);
     if app.slides.show_logs {
-        logs_view(app, ui, pal, Tab::Slides);
+        logs_view(app, ui, pal, Tab::Slides, now);
         return;
     }
     // bottom navigation
@@ -1618,10 +1707,16 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
         return;
     }
 
+    let tab_id = egui::Id::new("git-tab");
+    let mut tab: usize = ui.data(|d| d.get_temp(tab_id)).unwrap_or(0);
+
     // branch / remote
     ui.horizontal(|ui| {
         ui.add_space(4.0);
-        widgets::badge(ui, &format!("{}  {}", ic::BRANCH, app.git.branch), pal.accent);
+        let b = widgets::badge(ui, &format!("{}  {}", ic::BRANCH, truncate(&app.git.branch, 22)), pal.accent);
+        if ui.interact(b.rect, ui.id().with("git-branch-badge"), Sense::click()).on_hover_text(tr!("Branches anzeigen" | "Show branches")).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            tab = 1;
+        }
         if app.git.remote.is_some() {
             if app.git.ahead > 0 {
                 widgets::badge(ui, &format!("{} {}", ic::ARROW_UP, app.git.ahead), pal.green);
@@ -1638,7 +1733,11 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
                         app.git.sync(&root, false, ctx.clone());
                     }
                     if widgets::icon_button_sized(ui, ic::DOWNLOAD, tr!("Pull – Änderungen holen" | "Pull – fetch changes"), pal, false, 24.0).clicked() {
+                        app.save_all();
                         app.git.sync(&root, true, ctx.clone());
+                    }
+                    if widgets::icon_button_sized(ui, ic::CLOUD_DOWNLOAD, tr!("Fetch – Remote abfragen (neue Branches, ohne deine Dateien anzufassen)" | "Fetch – check the remote (new branches, without touching your files)"), pal, false, 24.0).clicked() {
+                        app.git.fetch(&root, ctx.clone());
                     }
                 }
             });
@@ -1660,160 +1759,824 @@ fn git_panel(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
             }
         });
     }
-    ui.add_space(8.0);
-
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        // changes
-        let n = app.git.changes.len();
-        let n_sel = n - app.git.excluded.len().min(n);
-        ui.horizontal(|ui| {
-            widgets::section_label(ui, &trf!("Änderungen ({n})" | "Changes ({n})"), pal);
-            if n > 0 {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::icon_button_sized(ui, ic::UNDO, tr!("Alle Änderungen verwerfen …" | "Discard all changes …"), pal, false, 22.0).clicked() {
-                        app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![String::new()] });
-                    }
-                    if n < 2 {
-                        return;
-                    }
-                    let all = app.git.excluded.is_empty();
-                    if ui.add(egui::Label::new(egui::RichText::new(if all { tr!("Alle abwählen" | "Deselect all") } else { tr!("Alle auswählen" | "Select all") }).font(widgets::ui_font(11.0)).color(pal.accent)).sense(Sense::click())).clicked() {
-                        if all {
-                            app.git.excluded = app.git.changes.iter().map(|c| c.path.clone()).collect();
-                        } else {
-                            app.git.excluded.clear();
-                        }
-                    }
-                });
+    // PRs also feed the badges on branches
+    if app.git.remote.is_some() && app.git.pr_stale && !app.git.pr_loading {
+        app.git.load_prs(&root, &ctx);
+    }
+    if app.git.merging {
+        ui.add_space(6.0);
+        Frame::new().fill(with_alpha(pal.red, 22)).stroke(Stroke::new(1.0, with_alpha(pal.red, 90))).corner_radius(8).inner_margin(Margin::same(10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(trf!("{}  Zusammenführen mit Konflikten" | "{}  Merge with conflicts", ic::MERGE)).font(widgets::bold_font(12.5)).color(pal.red));
+            ui.label(egui::RichText::new(tr!("Bearbeite die Dateien mit „U“ (Konfliktmarker <<<<<<< / >>>>>>> auflösen) und committe dann." | "Edit the files marked “U” (resolve the <<<<<<< / >>>>>>> markers), then commit.")).font(widgets::ui_font(11.5)).color(pal.subtext));
+            ui.add_space(4.0);
+            if widgets::button(ui, ic::TIMES, tr!("Merge abbrechen" | "Abort merge"), pal, BtnKind::Secondary).clicked() {
+                app.save_all();
+                let r = crate::git::GitState::abort_merge(&root);
+                app.git_done(r, true, now);
             }
         });
-        if n == 0 {
-            ui.label(egui::RichText::new(trf!("{}  Alles gesichert" | "{}  Everything saved", ic::CHECK)).font(widgets::ui_font(12.0)).color(pal.green));
+    }
+    ui.add_space(6.0);
+    let local_branches = app.git.branches.iter().filter(|b| !b.remote).count();
+    git_tabs(
+        ui,
+        &mut tab,
+        &[
+            (ic::PENCIL, tr!("Änderungen" | "Changes"), app.git.changes.len()),
+            (ic::BRANCH, tr!("Branches" | "Branches"), local_branches),
+            (ic::PULL_REQUEST, tr!("PRs" | "PRs"), app.git.prs.len()),
+            (ic::ARCHIVE, tr!("Geparkt" | "Parked"), app.git.stashes.len()),
+        ],
+        pal,
+    );
+    ui.add_space(8.0);
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt(("git-scroll", tab)).show(ui, |ui| match tab {
+        1 => git_branches_tab(app, ui, pal, now, &root, &ctx, &mut tab),
+        2 => git_prs_tab(app, ui, pal, now, &root, &ctx, &mut tab),
+        3 => git_stash_tab(app, ui, pal, now, &root),
+        _ => git_changes_tab(app, ui, pal, t, now, &root, &mut tab),
+    });
+    ui.data_mut(|d| d.insert_temp(tab_id, tab));
+}
+
+/// Tab row of the git panel: icon, count and label; animated underline.
+fn git_tabs(ui: &mut Ui, tab: &mut usize, items: &[(&str, &str, usize)], pal: &Palette) {
+    let h = 46.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
+    let w = rect.width() / items.len() as f32;
+    let p = ui.painter().clone();
+    p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, with_alpha(pal.border, 120)));
+    for (i, (icon, label, count)) in items.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(rect.min.x + w * i as f32, rect.min.y), vec2(w, h));
+        let resp = ui.interact(r, ui.id().with(("git-tab", i)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if resp.clicked() {
+            *tab = i;
         }
-        let mut open_diff: Option<String> = None;
-        let selected = match &app.git.view {
-            Some(crate::git::GitView::WorkingFile(p)) => Some(p.clone()),
-            _ => None,
+        let sel = *tab == i;
+        if resp.hovered() && !sel {
+            p.rect_filled(r.shrink2(vec2(2.0, 3.0)), 6.0, with_alpha(pal.text, 8));
+        }
+        let top = r.min.y + 15.0;
+        let cnt = if *count > 0 { count.to_string() } else { String::new() };
+        let g = p.layout_no_wrap(cnt.clone(), widgets::ui_font(10.0), pal.text);
+        let pill_w = if cnt.is_empty() { 0.0 } else { g.size().x + 9.0 };
+        let total = 14.0 + if cnt.is_empty() { 0.0 } else { 4.0 + pill_w };
+        let x0 = r.center().x - total / 2.0;
+        p.text(pos2(x0 + 7.0, top), Align2::CENTER_CENTER, *icon, widgets::ui_font(13.5), if sel { pal.accent } else { pal.dim });
+        if !cnt.is_empty() {
+            let pr = Rect::from_min_size(pos2(x0 + 18.0, top - 7.5), vec2(pill_w, 15.0));
+            p.rect_filled(pr, 7.5, if sel { with_alpha(pal.accent, 45) } else { with_alpha(pal.text, 18) });
+            p.text(pr.center(), Align2::CENTER_CENTER, cnt, widgets::ui_font(10.0), if sel { pal.accent } else { pal.subtext });
+        }
+        let maxc = ((w - 6.0) / 6.0).max(4.0) as usize;
+        p.text(pos2(r.center().x, r.min.y + 34.0), Align2::CENTER_CENTER, truncate(label, maxc), widgets::ui_font(10.5), if sel { pal.bright } else { pal.subtext });
+    }
+    let ax = ui.ctx().animate_value_with_time(ui.id().with("git-tab-x"), rect.min.x + w * *tab as f32, 0.18);
+    p.rect_filled(Rect::from_min_size(pos2(ax + 10.0, rect.max.y - 2.5), vec2(w - 20.0, 2.5)), 1.5, pal.accent);
+}
+
+/// "+12 −3 ■■■■□" right-aligned at `right`; returns the used width.
+fn diffstat(p: &egui::Painter, right: egui::Pos2, add: usize, del: usize, pal: &Palette) -> f32 {
+    let blocks = 5;
+    let total = add + del;
+    let filled = total.min(blocks);
+    let green = if total == 0 { 0 } else { ((add as f32 / total as f32) * filled as f32).round() as usize };
+    let (sz, gap) = (7.0, 2.0);
+    let bars = blocks as f32 * (sz + gap) - gap;
+    let mut x = right.x - bars;
+    for i in 0..blocks {
+        let col = if i < green {
+            pal.green
+        } else if i < filled {
+            pal.red
+        } else {
+            with_alpha(pal.text, 30)
         };
-        for c in app.git.changes.clone() {
-            let (label, letter) = c.label();
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
-            if selected.as_deref() == Some(c.path.as_str()) {
-                ui.painter().rect_filled(rect, 6.0, with_alpha(pal.accent, 30));
-            } else if resp.hovered() {
-                ui.painter().rect_filled(rect, 6.0, with_alpha(pal.text, 10));
-            }
-            let col = widgets::git_color(letter, pal);
-            // include-in-commit checkbox
-            let included = !app.git.excluded.contains(&c.path);
-            let cb = Rect::from_center_size(pos2(rect.min.x + 12.0, rect.center().y), vec2(14.0, 14.0));
-            let cresp = ui.interact(cb.expand(3.0), ui.id().with(("git-inc", &c.path)), Sense::click()).on_hover_text(tr!("Im nächsten Commit enthalten" | "Included in the next commit"));
-            ui.painter().rect_stroke(cb, 3.0, Stroke::new(1.2, if included { pal.accent } else { pal.dim }), StrokeKind::Inside);
-            if included {
-                ui.painter().rect_filled(cb.shrink(1.0), 2.0, pal.accent);
-                ui.painter().text(cb.center(), Align2::CENTER_CENTER, ic::CHECK, widgets::ui_font(8.5), pal.on_accent);
-            }
-            if cresp.clicked() {
-                if included {
-                    app.git.excluded.insert(c.path.clone());
-                } else {
-                    app.git.excluded.remove(&c.path);
+        p.rect_filled(Rect::from_min_size(pos2(x, right.y - sz / 2.0), vec2(sz, sz)), 1.5, col);
+        x += sz + gap;
+    }
+    let d = p.text(pos2(right.x - bars - 6.0, right.y), Align2::RIGHT_CENTER, format!("−{del}"), widgets::mono_font(11.0), pal.red);
+    let a = p.text(pos2(d.min.x - 5.0, right.y), Align2::RIGHT_CENTER, format!("+{add}"), widgets::mono_font(11.0), pal.green);
+    right.x - a.min.x
+}
+
+fn git_changes_tab(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64, root: &std::path::Path, tab: &mut usize) {
+    // changes
+    let n = app.git.changes.len();
+    let n_sel = n - app.git.excluded.len().min(n);
+    ui.horizontal(|ui| {
+        // the count is on the tab already
+        widgets::section_label(ui, tr!("Änderungen" | "Changes"), pal);
+        if n > 0 {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button_sized(ui, ic::UNDO, tr!("Alle Änderungen verwerfen …" | "Discard all changes …"), pal, false, 22.0).clicked() {
+                    app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![String::new()] });
                 }
-            }
-            let name = c.path.rsplit('/').next().unwrap_or(&c.path).to_string();
-            let dir = c.path.strip_suffix(&name).unwrap_or("").trim_end_matches('/').to_string();
-            let g = ui.painter().layout_no_wrap(name, widgets::ui_font(12.5), if included { mix(col, pal.text, 0.45) } else { pal.dim });
-            let nw = g.size().x;
-            ui.painter().galley(pos2(rect.min.x + 28.0, rect.center().y - g.size().y / 2.0), g, pal.text);
-            if !dir.is_empty() {
-                ui.painter().text(pos2(rect.min.x + 34.0 + nw, rect.center().y), Align2::LEFT_CENTER, truncate(&dir, 22), widgets::ui_font(11.0), pal.dim);
-            }
-            ui.painter().text(pos2(rect.max.x - 10.0, rect.center().y), Align2::RIGHT_CENTER, letter.to_string(), widgets::mono_font(11.5), col);
-            let resp = resp.on_hover_text(format!("{label}: {}", c.path));
-            if resp.clicked() {
-                open_diff = Some(c.path.clone());
-            }
-            resp.context_menu(|ui| {
-                if crate::project::is_text_file(&c.path) && ui.button(trf!("{}  Datei öffnen" | "{}  Open file", ic::FILE_TEXT)).clicked() {
-                    app.git.view = None;
-                    app.open_file(&c.path, t);
-                    ui.close();
+                if widgets::icon_button_sized(ui, ic::ARCHIVE, tr!("Alle Änderungen parken (Stash) – die Commit-Nachricht wird zur Beschreibung" | "Park all changes (stash) – the commit message becomes the description"), pal, false, 22.0).clicked() {
+                    app.save_all();
+                    let msg = std::mem::take(&mut app.git.message);
+                    let r = app.git.stash_push(root, &msg);
+                    app.git_done(r, true, now);
                 }
-                if ui.button(egui::RichText::new(trf!("{}  Änderungen verwerfen" | "{}  Discard changes", ic::UNDO)).color(pal.red)).clicked() {
-                    app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![c.path.clone()] });
-                    ui.close();
+                if n < 2 {
+                    return;
+                }
+                let all = app.git.excluded.is_empty();
+                if ui.add(egui::Label::new(egui::RichText::new(if all { tr!("Alle abwählen" | "Deselect all") } else { tr!("Alle auswählen" | "Select all") }).font(widgets::ui_font(11.0)).color(pal.accent)).sense(Sense::click())).clicked() {
+                    if all {
+                        app.git.excluded = app.git.changes.iter().map(|c| c.path.clone()).collect();
+                    } else {
+                        app.git.excluded.clear();
+                    }
                 }
             });
         }
-        if let Some(p) = open_diff {
-            app.save_all();
-            app.git.open_working_diff(&root, &p);
+    });
+    if n == 0 {
+        ui.label(egui::RichText::new(trf!("{}  Alles gesichert" | "{}  Everything saved", ic::CHECK)).font(widgets::ui_font(12.0)).color(pal.green));
+    }
+    let mut open_diff: Option<String> = None;
+    let selected = match &app.git.view {
+        Some(crate::git::GitView::WorkingFile(p)) => Some(p.clone()),
+        _ => None,
+    };
+    for c in app.git.changes.clone() {
+        let (label, letter) = c.label();
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+        if selected.as_deref() == Some(c.path.as_str()) {
+            ui.painter().rect_filled(rect, 6.0, with_alpha(pal.accent, 30));
+        } else if resp.hovered() {
+            ui.painter().rect_filled(rect, 6.0, with_alpha(pal.text, 10));
         }
-        ui.add_space(8.0);
-        ui.add(egui::TextEdit::multiline(&mut app.git.message).hint_text(tr!("Was hast du geändert? (optional)" | "What did you change? (optional)")).desired_rows(2).desired_width(f32::INFINITY));
-        ui.add_space(6.0);
-        ui.add_enabled_ui(n_sel > 0, |ui| {
-            let label = if n_sel == n { tr!("Commit – Stand sichern" | "Commit – save state").to_string() } else { trf!("Commit – {n_sel} von {n} Dateien" | "Commit – {n_sel} of {n} files") };
-            if widgets::button(ui, ic::CHECK, &label, pal, BtnKind::Primary).clicked() {
-                app.save_all();
-                match app.git.commit(&root) {
-                    Ok(()) => {
-                        let g = pal.green;
-                        app.toast(ic::GIT, tr!("Neuer Stand gesichert" | "New state saved"), g, now);
-                        app.git.view = None;
-                    }
-                    Err(e) => {
-                        let r = pal.red;
-                        app.toast(ic::WARN, format!("Git: {}", truncate(&e, 90)), r, now);
-                    }
-                }
-                app.git.refresh(&root, now);
+        let col = widgets::git_color(letter, pal);
+        // include-in-commit checkbox
+        let included = !app.git.excluded.contains(&c.path);
+        let cb = Rect::from_center_size(pos2(rect.min.x + 12.0, rect.center().y), vec2(14.0, 14.0));
+        let cresp = ui.interact(cb.expand(3.0), ui.id().with(("git-inc", &c.path)), Sense::click()).on_hover_text(tr!("Im nächsten Commit enthalten" | "Included in the next commit"));
+        ui.painter().rect_stroke(cb, 3.0, Stroke::new(1.2, if included { pal.accent } else { pal.dim }), StrokeKind::Inside);
+        if included {
+            ui.painter().rect_filled(cb.shrink(1.0), 2.0, pal.accent);
+            ui.painter().text(cb.center(), Align2::CENTER_CENTER, ic::CHECK, widgets::ui_font(8.5), pal.on_accent);
+        }
+        if cresp.clicked() {
+            if included {
+                app.git.excluded.insert(c.path.clone());
+            } else {
+                app.git.excluded.remove(&c.path);
+            }
+        }
+        let name = c.path.rsplit('/').next().unwrap_or(&c.path).to_string();
+        let dir = c.path.strip_suffix(&name).unwrap_or("").trim_end_matches('/').to_string();
+        let g = ui.painter().layout_no_wrap(name, widgets::ui_font(12.5), if included { mix(col, pal.text, 0.45) } else { pal.dim });
+        let nw = g.size().x;
+        ui.painter().galley(pos2(rect.min.x + 28.0, rect.center().y - g.size().y / 2.0), g, pal.text);
+        if !dir.is_empty() {
+            ui.painter().text(pos2(rect.min.x + 34.0 + nw, rect.center().y), Align2::LEFT_CENTER, truncate(&dir, 22), widgets::ui_font(11.0), pal.dim);
+        }
+        ui.painter().text(pos2(rect.max.x - 10.0, rect.center().y), Align2::RIGHT_CENTER, letter.to_string(), widgets::mono_font(11.5), col);
+        let resp = resp.on_hover_text(format!("{label}: {}", c.path));
+        if resp.clicked() {
+            open_diff = Some(c.path.clone());
+        }
+        resp.context_menu(|ui| {
+            if crate::project::is_text_file(&c.path) && ui.button(trf!("{}  Datei öffnen" | "{}  Open file", ic::FILE_TEXT)).clicked() {
+                app.git.view = None;
+                app.open_file(&c.path, t);
+                ui.close();
+            }
+            if ui.button(egui::RichText::new(trf!("{}  Änderungen verwerfen" | "{}  Discard changes", ic::UNDO)).color(pal.red)).clicked() {
+                app.dialog = Some(crate::app::Dialog::GitRevert { paths: vec![c.path.clone()] });
+                ui.close();
             }
         });
-        ui.add_space(14.0);
-
-        // history
-        widgets::section_label(ui, &trf!("Verlauf ({})" | "History ({})", app.git.log.len()), pal);
-        let current = match &app.git.view {
-            Some(crate::git::GitView::Commit(h)) => Some(h.clone()),
-            _ => None,
-        };
-        let mut open: Option<String> = None;
-        let log = app.git.log.clone();
-        for (i, c) in log.iter().enumerate() {
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
-            let sel = current.as_deref() == Some(c.hash.as_str());
-            if sel {
-                ui.painter().rect_filled(rect, 7.0, with_alpha(pal.accent, 30));
-            } else if resp.hovered() {
-                ui.painter().rect_filled(rect, 7.0, with_alpha(pal.text, 10));
+    }
+    if let Some(p) = open_diff {
+        app.save_all();
+        app.git.open_working_diff(&root, &p);
+    }
+    ui.add_space(8.0);
+    ui.add(egui::TextEdit::multiline(&mut app.git.message).hint_text(tr!("Was hast du geändert? (optional)" | "What did you change? (optional)")).desired_rows(2).desired_width(f32::INFINITY));
+    ui.add_space(6.0);
+    ui.add_enabled_ui(n_sel > 0, |ui| {
+        let label = if n_sel == n { tr!("Commit – Stand sichern" | "Commit – save state").to_string() } else { trf!("Commit – {n_sel} von {n} Dateien" | "Commit – {n_sel} of {n} files") };
+        if widgets::button(ui, ic::CHECK, &label, pal, BtnKind::Primary).clicked() {
+            app.save_all();
+            match app.git.commit(&root) {
+                Ok(()) => {
+                    let g = pal.green;
+                    app.toast(ic::GIT, tr!("Neuer Stand gesichert" | "New state saved"), g, now);
+                    app.git.view = None;
+                }
+                Err(e) => {
+                    let r = pal.red;
+                    app.toast(ic::WARN, format!("Git: {}", truncate(&e, 90)), r, now);
+                }
             }
-            // timeline
-            let x = rect.min.x + 12.0;
-            if i + 1 < log.len() {
-                ui.painter().line_segment([pos2(x, rect.center().y), pos2(x, rect.max.y + 4.0)], Stroke::new(1.5, with_alpha(pal.border, 200)));
-            }
-            if i > 0 {
-                ui.painter().line_segment([pos2(x, rect.min.y - 4.0), pos2(x, rect.center().y)], Stroke::new(1.5, with_alpha(pal.border, 200)));
-            }
-            ui.painter().circle_filled(pos2(x, rect.center().y), if i == 0 { 5.0 } else { 3.5 }, if i == 0 { pal.accent } else { mix(pal.accent, pal.dim, 0.5) });
-            let maxc = ((rect.width() - 34.0) / 6.8).max(8.0) as usize;
-            ui.painter().text(pos2(rect.min.x + 26.0, rect.min.y + 14.0), Align2::LEFT_CENTER, truncate(&c.subject, maxc), widgets::bold_font(12.5), if sel { pal.bright } else { pal.text });
-            ui.painter().text(
-                pos2(rect.min.x + 26.0, rect.min.y + 31.0),
-                Align2::LEFT_CENTER,
-                format!("{}  ·  {}  ·  {}", crate::git::relative_time(c.time), truncate(&c.author, 16), c.short),
-                widgets::ui_font(11.0),
-                pal.dim,
-            );
-            if resp.clicked() {
-                open = Some(c.hash.clone());
-            }
-        }
-        if let Some(h) = open {
-            app.git.open_commit(&root, &h);
+            app.git.refresh(&root, now);
         }
     });
+    ui.add_space(14.0);
+
+    // history
+    widgets::section_label(ui, &trf!("Verlauf ({})" | "History ({})", app.git.log.len()), pal);
+    let current = match &app.git.view {
+        Some(crate::git::GitView::Commit(h)) => Some(h.clone()),
+        _ => None,
+    };
+    let mut open: Option<String> = None;
+    let log = app.git.log.clone();
+    for (i, c) in log.iter().enumerate() {
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
+        let sel = current.as_deref() == Some(c.hash.as_str());
+        if sel {
+            ui.painter().rect_filled(rect, 7.0, with_alpha(pal.accent, 30));
+        } else if resp.hovered() {
+            ui.painter().rect_filled(rect, 7.0, with_alpha(pal.text, 10));
+        }
+        // timeline
+        let x = rect.min.x + 12.0;
+        if i + 1 < log.len() {
+            ui.painter().line_segment([pos2(x, rect.center().y), pos2(x, rect.max.y + 4.0)], Stroke::new(1.5, with_alpha(pal.border, 200)));
+        }
+        if i > 0 {
+            ui.painter().line_segment([pos2(x, rect.min.y - 4.0), pos2(x, rect.center().y)], Stroke::new(1.5, with_alpha(pal.border, 200)));
+        }
+        // changes parked on this commit branch off the timeline
+        let parked: Vec<&crate::git::Stash> = app.git.stashes.iter().filter(|s| s.base == c.hash).collect();
+        let mut marker_w = 0.0;
+        if !parked.is_empty() {
+            let col = pal.magenta;
+            let (a, b) = (pos2(x, rect.center().y), pos2(x + 8.0, rect.center().y - 10.0));
+            ui.painter().add(egui::epaint::QuadraticBezierShape::from_points_stroke([a, pos2(x + 8.0, rect.center().y), b], false, Color32::TRANSPARENT, Stroke::new(1.5, with_alpha(col, 180))));
+            ui.painter().circle_filled(b, 3.0, col);
+            let label = format!("{} {}", ic::ARCHIVE, parked.len());
+            let g = ui.painter().layout_no_wrap(label, widgets::ui_font(10.5), col);
+            let pill = Rect::from_min_size(pos2(rect.max.x - g.size().x - 18.0, rect.min.y + 6.0), vec2(g.size().x + 12.0, 17.0));
+            marker_w = pill.width() + 8.0;
+            ui.painter().rect_filled(pill, 8.5, with_alpha(col, 34));
+            ui.painter().galley(pos2(pill.min.x + 6.0, pill.center().y - g.size().y / 2.0), g, col);
+            let tip = parked.iter().map(|s| format!("{}  ·  {}", s.title(), crate::git::relative_time(s.time))).collect::<Vec<_>>().join("\n");
+            let pr = ui.interact(pill, ui.id().with(("git-parked", &c.hash)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            if pr.on_hover_text(trf!("Hier geparkt:\n{tip}" | "Parked here:\n{tip}")).clicked() {
+                *tab = 3;
+            }
+        }
+        ui.painter().circle_filled(pos2(x, rect.center().y), if i == 0 { 5.0 } else { 3.5 }, if i == 0 { pal.accent } else { mix(pal.accent, pal.dim, 0.5) });
+        let maxc = ((rect.width() - 34.0 - marker_w) / 6.8).max(8.0) as usize;
+        ui.painter().text(pos2(rect.min.x + 26.0, rect.min.y + 14.0), Align2::LEFT_CENTER, truncate(&c.subject, maxc), widgets::bold_font(12.5), if sel { pal.bright } else { pal.text });
+        ui.painter().text(
+            pos2(rect.min.x + 26.0, rect.min.y + 31.0),
+            Align2::LEFT_CENTER,
+            format!("{}  ·  {}  ·  {}", crate::git::relative_time(c.time), truncate(&c.author, 16), c.short),
+            widgets::ui_font(11.0),
+            pal.dim,
+        );
+        if resp.clicked() {
+            open = Some(c.hash.clone());
+        }
+    }
+    if let Some(h) = open {
+        app.git.open_commit(&root, &h);
+    }
+}
+
+enum BranchAction {
+    Switch(crate::git::Branch),
+    Merge(String),
+    Delete(String, bool),
+    Pr,
+}
+
+fn git_branches_tab(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64, root: &std::path::Path, ctx: &egui::Context, tab: &mut usize) {
+    // new branch from HEAD
+    widgets::section_label(ui, tr!("Neuer Branch" | "New branch"), pal);
+    let id = egui::Id::new("git-new-branch");
+    let mut name: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let mut create = false;
+    // button first (right to left), the field takes exactly the rest – a field sized from
+    // a guessed button width makes the resizable sidebar grow every frame
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.add_enabled_ui(!name.trim().is_empty(), |ui| {
+            if widgets::icon_button_sized(ui, ic::PLUS, tr!("Anlegen und hinwechseln" | "Create and switch to it"), pal, false, 28.0).clicked() {
+                create = true;
+            }
+        });
+        let te = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr!("z. B. kapitel-3" | "e.g. chapter-3")).desired_width(ui.available_width()));
+        if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            create = true;
+        }
+    });
+    // branch names cannot contain spaces
+    name = name.replace(' ', "-");
+    let n = app.git.changes.len();
+    ui.label(
+        egui::RichText::new(if n > 0 {
+            trf!("Startet beim aktuellen Stand von {} – deine {n} ungesicherte(n) Änderung(en) kommen mit." | "Starts from the current state of {} – your {n} uncommitted change(s) come along.", app.git.branch)
+        } else {
+            trf!("Startet beim aktuellen Stand von {}." | "Starts from the current state of {}.", app.git.branch)
+        })
+        .font(widgets::ui_font(11.0))
+        .color(pal.dim),
+    );
+    if create && !name.trim().is_empty() {
+        app.save_all();
+        let r = app.git.create_branch(root, &name);
+        if r.is_ok() {
+            name.clear();
+        }
+        app.git_done(r, false, now);
+    }
+    ui.data_mut(|d| d.insert_temp(id, name));
+    ui.add_space(12.0);
+
+    let branches = app.git.branches.clone();
+    let mut act: Option<BranchAction> = None;
+    let (local, remote): (Vec<_>, Vec<_>) = branches.iter().partition(|b| !b.remote);
+    widgets::section_label(ui, &trf!("Lokal ({})" | "Local ({})", local.len()), pal);
+    for b in &local {
+        branch_row(app, ui, pal, b, &mut act);
+    }
+    ui.add_space(10.0);
+    if app.git.remote.is_some() {
+        ui.horizontal(|ui| {
+            widgets::section_label(ui, &trf!("Nur auf dem Remote ({})" | "Only on the remote ({})", remote.len()), pal);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !app.git.busy && widgets::icon_button_sized(ui, ic::CLOUD_DOWNLOAD, tr!("Fetch – Remote abfragen" | "Fetch – check the remote"), pal, false, 22.0).clicked() {
+                    app.git.fetch(root, ctx.clone());
+                }
+            });
+        });
+        if remote.is_empty() {
+            ui.label(egui::RichText::new(tr!("Alle Remote-Branches sind auch lokal da. Fetch holt neue." | "All remote branches exist locally. Fetch picks up new ones.")).font(widgets::ui_font(11.0)).color(pal.dim));
+        }
+        for b in &remote {
+            branch_row(app, ui, pal, b, &mut act);
+        }
+    }
+    match act {
+        Some(BranchAction::Switch(b)) => app.git_switch(crate::git::SwitchTarget::Branch(b), None, ctx, now),
+        Some(BranchAction::Merge(name)) => {
+            app.save_all();
+            let r = app.git.merge_branch(root, &name);
+            app.git_done(r, true, now);
+        }
+        Some(BranchAction::Delete(name, merged)) => app.dialog = Some(crate::app::Dialog::GitDeleteBranch { name, merged }),
+        Some(BranchAction::Pr) => *tab = 2,
+        None => {}
+    }
+}
+
+fn branch_row(app: &App, ui: &mut Ui, pal: &Palette, b: &crate::git::Branch, act: &mut Option<BranchAction>) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
+    let p = ui.painter().clone();
+    let col = if b.current { pal.accent } else { widgets::color_for(b.local_name(), pal) };
+    if b.current {
+        p.rect_filled(rect, 7.0, with_alpha(pal.accent, 22));
+        p.rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 8.0), vec2(3.0, rect.height() - 16.0)), 1.5, pal.accent);
+    } else if resp.hovered() {
+        p.rect_filled(rect, 7.0, with_alpha(pal.text, 10));
+    }
+    // node
+    let c = pos2(rect.min.x + 15.0, rect.min.y + 15.0);
+    if b.remote {
+        p.text(c, Align2::CENTER_CENTER, ic::GLOBE, widgets::ui_font(11.0), pal.dim);
+    } else if b.current {
+        p.circle_filled(c, 5.0, col);
+        p.circle_stroke(c, 8.0, Stroke::new(1.2, with_alpha(col, 110)));
+    } else {
+        p.circle_stroke(c, 4.5, Stroke::new(1.8, col));
+    }
+    // badges, right to left
+    let mut x = rect.max.x - 8.0;
+    let y = rect.min.y + 15.0;
+    let mut tag = |text: String, color: Color32, tip: Option<String>| {
+        let g = p.layout_no_wrap(text, widgets::ui_font(10.5), color);
+        let r = Rect::from_min_size(pos2(x - g.size().x - 10.0, y - 8.5), vec2(g.size().x + 10.0, 17.0));
+        p.rect_filled(r, 8.5, with_alpha(color, 30));
+        p.galley(pos2(r.min.x + 5.0, r.center().y - g.size().y / 2.0), g, color);
+        if let Some(t) = tip {
+            ui.interact(r, ui.id().with(("br-tag", &b.name, r.min.x as i32)), Sense::hover()).on_hover_text(t);
+        }
+        x = r.min.x - 4.0;
+    };
+    if let Some(pr) = app.git.prs.iter().find(|pr| pr.branch == b.local_name()) {
+        tag(format!("{} #{}", ic::PULL_REQUEST, pr.number), pal.blue, Some(pr.title.clone()));
+    }
+    let parked = app.git.stashes.iter().filter(|s| s.auto && s.branch == b.local_name()).count();
+    if parked > 0 {
+        tag(format!("{} {parked}", ic::ARCHIVE), pal.magenta, Some(tr!("Hier liegen geparkte Änderungen – sie kommen beim Wechsel automatisch zurück." | "Parked changes live here – they come back automatically when you switch.").into()));
+    }
+    if b.behind > 0 {
+        tag(format!("{} {}", ic::ARROW_DOWN, b.behind), pal.yellow, Some(trf!("{} Commit(s) auf dem Remote, die hier fehlen" | "{} commit(s) on the remote missing here", b.behind)));
+    }
+    if b.ahead > 0 {
+        tag(format!("{} {}", ic::ARROW_UP, b.ahead), pal.green, Some(trf!("{} Commit(s) noch nicht hochgeladen" | "{} commit(s) not uploaded yet", b.ahead)));
+    }
+    if b.gone {
+        tag(tr!("Remote gelöscht" | "remote gone").into(), pal.red, Some(tr!("Der Branch wurde auf dem Remote gelöscht (z. B. nach einem gemergten PR)." | "The branch was deleted on the remote (e.g. after a merged PR).").into()));
+    }
+    // name + last commit
+    let maxc = ((x - rect.min.x - 32.0) / 7.0).max(6.0) as usize;
+    p.text(pos2(rect.min.x + 30.0, y), Align2::LEFT_CENTER, truncate(&b.name, maxc), widgets::bold_font(12.5), if b.current { pal.bright } else { pal.text });
+    let maxs = ((rect.width() - 36.0) / 6.2).max(8.0) as usize;
+    p.text(
+        pos2(rect.min.x + 30.0, rect.min.y + 32.0),
+        Align2::LEFT_CENTER,
+        truncate(&format!("{}  ·  {}", crate::git::relative_time(b.time), b.subject), maxs),
+        widgets::ui_font(11.0),
+        pal.dim,
+    );
+    let resp = if b.current {
+        resp.on_hover_text(tr!("Aktueller Branch" | "Current branch"))
+    } else if b.remote {
+        resp.on_hover_text(trf!("Klicken: als lokalen Branch „{}“ auschecken" | "Click: check out as local branch “{}”", b.local_name())).on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        resp.on_hover_text(tr!("Klicken zum Wechseln" | "Click to switch")).on_hover_cursor(egui::CursorIcon::PointingHand)
+    };
+    if resp.clicked() && !b.current {
+        *act = Some(BranchAction::Switch(b.clone()));
+    }
+    resp.context_menu(|ui| {
+        if !b.current && ui.button(trf!("{}  Wechseln" | "{}  Switch", ic::ARROW_RIGHT)).clicked() {
+            *act = Some(BranchAction::Switch(b.clone()));
+            ui.close();
+        }
+        if !b.current && ui.button(trf!("{}  In {} übernehmen (Merge)" | "{}  Merge into {}", ic::MERGE, app.git.branch)).clicked() {
+            *act = Some(BranchAction::Merge(b.name.clone()));
+            ui.close();
+        }
+        if b.current && app.git.remote.is_some() && b.name != app.git.default_branch && ui.button(trf!("{}  Pull Request erstellen" | "{}  Create pull request", ic::PULL_REQUEST)).clicked() {
+            *act = Some(BranchAction::Pr);
+            ui.close();
+        }
+        if ui.button(trf!("{}  Namen kopieren" | "{}  Copy name", ic::COPY)).clicked() {
+            ui.ctx().copy_text(b.local_name().to_string());
+            ui.close();
+        }
+        if !b.current && !b.remote {
+            ui.separator();
+            if ui.button(egui::RichText::new(trf!("{}  Löschen …" | "{}  Delete …", ic::TRASH)).color(pal.red)).clicked() {
+                *act = Some(BranchAction::Delete(b.name.clone(), b.merged));
+                ui.close();
+            }
+        }
+    });
+}
+
+fn info_card(ui: &mut Ui, pal: &Palette, icon: &str, title: &str, text: &str, add: impl FnOnce(&mut Ui)) {
+    Frame::new().fill(pal.surface).corner_radius(10).inner_margin(Margin::same(12)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(icon).font(widgets::ui_font(20.0)).color(pal.accent));
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(title).font(widgets::bold_font(13.5)).color(pal.bright));
+        ui.label(egui::RichText::new(text).font(widgets::ui_font(11.5)).color(pal.subtext));
+        add(ui);
+    });
+}
+
+fn git_prs_tab(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64, root: &std::path::Path, ctx: &egui::Context, tab: &mut usize) {
+    if app.git.remote.is_none() {
+        info_card(ui, pal, ic::PULL_REQUEST, tr!("Kein Remote verbunden" | "No remote connected"), tr!("Pull Requests leben auf GitHub. Verbinde oben zuerst ein Remote (GitHub-Repository)." | "Pull requests live on GitHub. Connect a remote (GitHub repository) above first."), |_| {});
+        return;
+    }
+    match app.git.pr_error.clone() {
+        Some(crate::git::PrError::NoGh) => {
+            info_card(ui, pal, ic::TERMINAL, tr!("GitHub-CLI fehlt" | "GitHub CLI missing"), tr!("Für Pull Requests nutzt nEdit „gh“. Installieren (z. B. pacman -S github-cli) und einmal anmelden:" | "nEdit uses “gh” for pull requests. Install it (e.g. pacman -S github-cli) and sign in once:"), |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("gh auth login").font(widgets::mono_font(12.5)).color(pal.accent));
+                    if widgets::icon_button_sized(ui, ic::COPY, tr!("Kopieren" | "Copy"), pal, false, 22.0).clicked() {
+                        ui.ctx().copy_text("gh auth login".into());
+                    }
+                });
+                if widgets::button(ui, ic::REFRESH, tr!("Erneut prüfen" | "Check again"), pal, BtnKind::Secondary).clicked() {
+                    app.git.pr_stale = true;
+                }
+            });
+            return;
+        }
+        Some(crate::git::PrError::Failed(e)) => {
+            info_card(ui, pal, ic::WARN, tr!("Pull Requests nicht abrufbar" | "Could not load pull requests"), &truncate(&e, 300), |ui| {
+                ui.add_space(6.0);
+                if widgets::button(ui, ic::REFRESH, tr!("Erneut versuchen" | "Try again"), pal, BtnKind::Secondary).clicked() {
+                    app.git.pr_stale = true;
+                }
+            });
+            return;
+        }
+        None => {}
+    }
+
+    // the current branch
+    widgets::section_label(ui, &trf!("Dein Branch · {}" | "Your branch · {}", app.git.branch), pal);
+    if let Some(pr) = app.git.current_pr().cloned() {
+        pr_row(app, ui, pal, &pr, true);
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if !app.git.busy && widgets::chip(ui, ic::MERGE, tr!("Zusammenführen …" | "Merge …"), true, pal.accent, pal).clicked() {
+                app.dialog = Some(crate::app::Dialog::GitMergePr { number: pr.number, title: pr.title.clone(), squash: false, delete_branch: true });
+            }
+            if widgets::chip(ui, ic::EXTERNAL, tr!("Auf GitHub" | "On GitHub"), false, pal.accent, pal).clicked() {
+                crate::platform::open_external(&pr.url);
+            }
+        });
+        if app.git.ahead > 0 {
+            ui.label(egui::RichText::new(trf!("{} neue Commit(s) – mit {} hochladen, dann sind sie im PR." | "{} new commit(s) – upload with {} to add them to the PR.", app.git.ahead, ic::UPLOAD)).font(widgets::ui_font(11.0)).color(pal.yellow));
+        }
+    } else if app.git.branch == app.git.default_branch {
+        info_card(ui, pal, ic::BRANCH, &trf!("Du bist auf {}" | "You are on {}", app.git.branch), tr!("Ein Pull Request schlägt die Änderungen eines eigenen Branches vor. Lege dafür zuerst einen Branch an." | "A pull request proposes the changes of a separate branch. Create a branch first."), |ui| {
+            ui.add_space(6.0);
+            if widgets::button(ui, ic::PLUS, tr!("Zu den Branches" | "Go to branches"), pal, BtnKind::Secondary).clicked() {
+                *tab = 1;
+            }
+        });
+    } else {
+        pr_create_form(app, ui, pal, root, ctx);
+    }
+    ui.add_space(14.0);
+
+    // open pull requests
+    let others: Vec<crate::git::PullRequest> = app.git.prs.iter().filter(|p| p.branch != app.git.branch).cloned().collect();
+    ui.horizontal(|ui| {
+        widgets::section_label(ui, &trf!("Offen ({})" | "Open ({})", others.len()), pal);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if app.git.pr_loading {
+                let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                widgets::draw_spinner(ui, r.center(), 6.0, pal.accent);
+            } else if widgets::icon_button_sized(ui, ic::REFRESH, tr!("Neu laden" | "Reload"), pal, false, 22.0).clicked() {
+                app.git.load_prs(root, ctx);
+            }
+        });
+    });
+    if others.is_empty() && !app.git.pr_loading {
+        ui.label(egui::RichText::new(tr!("Keine weiteren offenen Pull Requests." | "No other open pull requests.")).font(widgets::ui_font(11.5)).color(pal.dim));
+    }
+    let mut checkout = None;
+    for pr in &others {
+        if pr_row(app, ui, pal, pr, false) {
+            checkout = Some(pr.number);
+        }
+    }
+    if let Some(n) = checkout {
+        app.git_switch(crate::git::SwitchTarget::Pr(n), None, ctx, now);
+    }
+}
+
+/// One pull request; returns true if it should be checked out.
+fn pr_row(app: &mut App, ui: &mut Ui, pal: &Palette, pr: &crate::git::PullRequest, own: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 50.0), Sense::click());
+    let p = ui.painter().clone();
+    if own {
+        p.rect_filled(rect, 7.0, with_alpha(pal.accent, 22));
+    } else if resp.hovered() {
+        p.rect_filled(rect, 7.0, with_alpha(pal.text, 10));
+    }
+    let icol = if pr.draft { pal.dim } else { pal.green };
+    p.text(pos2(rect.min.x + 14.0, rect.min.y + 15.0), Align2::CENTER_CENTER, ic::PULL_REQUEST, widgets::ui_font(13.0), icol);
+    // review state + size on the right
+    let (rtext, rcol) = match pr.review.as_str() {
+        _ if pr.draft => (tr!("Entwurf" | "Draft"), pal.dim),
+        "APPROVED" => (tr!("Freigegeben" | "Approved"), pal.green),
+        "CHANGES_REQUESTED" => (tr!("Änderungen gewünscht" | "Changes requested"), pal.red),
+        "REVIEW_REQUIRED" => (tr!("Review offen" | "Review pending"), pal.yellow),
+        _ => ("", pal.dim),
+    };
+    let mut right = rect.max.x - 8.0;
+    if !rtext.is_empty() {
+        let g = p.layout_no_wrap(rtext.to_string(), widgets::ui_font(10.5), rcol);
+        let r = Rect::from_min_size(pos2(right - g.size().x - 10.0, rect.min.y + 6.5), vec2(g.size().x + 10.0, 17.0));
+        p.rect_filled(r, 8.5, with_alpha(rcol, 30));
+        p.galley(pos2(r.min.x + 5.0, r.center().y - g.size().y / 2.0), g, rcol);
+        right = r.min.x - 6.0;
+    }
+    let maxc = ((right - rect.min.x - 34.0) / 7.0).max(6.0) as usize;
+    p.text(pos2(rect.min.x + 28.0, rect.min.y + 15.0), Align2::LEFT_CENTER, truncate(&format!("#{}  {}", pr.number, pr.title), maxc), widgets::bold_font(12.5), pal.text);
+    let w = diffstat(&p, pos2(rect.max.x - 8.0, rect.min.y + 34.0), pr.additions, pr.deletions, pal);
+    let maxs = ((rect.width() - 40.0 - w) / 6.2).max(6.0) as usize;
+    p.text(
+        pos2(rect.min.x + 28.0, rect.min.y + 34.0),
+        Align2::LEFT_CENTER,
+        truncate(&format!("{} → {}  ·  {}  ·  {}", pr.branch, pr.base, pr.author, crate::git::relative_time(pr.updated)), maxs),
+        widgets::ui_font(11.0),
+        pal.dim,
+    );
+    let mut checkout = false;
+    let resp = if own { resp } else { resp.on_hover_text(trf!("Klicken: Branch {} auschecken, um den PR anzusehen und zu testen" | "Click: check out branch {} to look at and test the PR", pr.branch)).on_hover_cursor(egui::CursorIcon::PointingHand) };
+    if resp.clicked() && !own {
+        checkout = true;
+    }
+    resp.context_menu(|ui| {
+        if ui.button(trf!("{}  Auf GitHub öffnen" | "{}  Open on GitHub", ic::EXTERNAL)).clicked() {
+            crate::platform::open_external(&pr.url);
+            ui.close();
+        }
+        if !own && ui.button(trf!("{}  Auschecken" | "{}  Check out", ic::ARROW_RIGHT)).clicked() {
+            checkout = true;
+            ui.close();
+        }
+        if ui.button(trf!("{}  Link kopieren" | "{}  Copy link", ic::LINK)).clicked() {
+            ui.ctx().copy_text(pr.url.clone());
+            ui.close();
+        }
+        if !app.git.busy && ui.button(trf!("{}  Zusammenführen …" | "{}  Merge …", ic::MERGE)).clicked() {
+            app.dialog = Some(crate::app::Dialog::GitMergePr { number: pr.number, title: pr.title.clone(), squash: false, delete_branch: true });
+            ui.close();
+        }
+    });
+    checkout
+}
+
+fn pr_create_form(app: &mut App, ui: &mut Ui, pal: &Palette, root: &std::path::Path, ctx: &egui::Context) {
+    let branch = app.git.branch.clone();
+    let id = egui::Id::new(("git-pr-form", branch.clone()));
+    // (title, body, base, draft)
+    let mut form: (String, String, String, bool) = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| {
+        let title = app.git.log.first().filter(|_| app.git.ahead > 0 || app.git.log.len() > 1).map(|c| c.subject.clone()).unwrap_or_else(|| branch.replace(['-', '_'], " "));
+        (title, String::new(), app.git.default_branch.clone(), false)
+    });
+    let mut submit = false;
+    Frame::new().fill(pal.surface).corner_radius(10).inner_margin(Margin::same(12)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(trf!("{}  Pull Request erstellen" | "{}  Create pull request", ic::PULL_REQUEST)).font(widgets::bold_font(13.0)).color(pal.bright));
+        ui.add_space(6.0);
+        ui.add(egui::TextEdit::singleline(&mut form.0).hint_text(tr!("Titel" | "Title")).desired_width(f32::INFINITY));
+        ui.add_space(4.0);
+        ui.add(egui::TextEdit::multiline(&mut form.1).hint_text(tr!("Was ändert sich? (optional)" | "What changes? (optional)")).desired_rows(3).desired_width(f32::INFINITY));
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{}  {branch}  →", ic::BRANCH)).font(widgets::ui_font(11.5)).color(pal.subtext));
+            egui::ComboBox::from_id_salt(("git-pr-base", &branch)).selected_text(form.2.clone()).width(110.0).show_ui(ui, |ui| {
+                for b in app.git.branches.iter().filter(|b| !b.remote && b.name != branch) {
+                    ui.selectable_value(&mut form.2, b.name.clone(), &b.name);
+                }
+            });
+        });
+        ui.checkbox(&mut form.3, tr!("Als Entwurf (noch nicht bereit zum Review)" | "As draft (not ready for review yet)"));
+        ui.add_space(6.0);
+        let n = app.git.changes.len();
+        if n > 0 {
+            ui.label(egui::RichText::new(trf!("{}  {n} ungesicherte Änderung(en) sind nicht Teil des PRs – vorher committen." | "{}  {n} uncommitted change(s) are not part of the PR – commit first.", ic::WARN)).font(widgets::ui_font(11.0)).color(pal.yellow));
+            ui.add_space(4.0);
+        }
+        ui.add_enabled_ui(!app.git.busy && !form.0.trim().is_empty(), |ui| {
+            if widgets::button(ui, ic::UPLOAD, tr!("Hochladen & erstellen" | "Upload & create"), pal, BtnKind::Primary).clicked() {
+                submit = true;
+            }
+        });
+    });
+    if submit {
+        let (title, body, base, draft) = form.clone();
+        app.git.create_pr(root, title.trim().to_string(), body, base, draft, ctx.clone());
+        ui.data_mut(|d| d.remove::<(String, String, String, bool)>(id));
+    } else {
+        ui.data_mut(|d| d.insert_temp(id, form));
+    }
+}
+
+enum StashAction {
+    Restore(String, bool),
+    View(String),
+    Drop(String, String),
+}
+
+fn git_stash_tab(app: &mut App, ui: &mut Ui, pal: &Palette, now: f64, root: &std::path::Path) {
+    // park the current changes
+    let n = app.git.changes.len();
+    let id = egui::Id::new("git-stash-msg");
+    let mut msg: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let mut park = false;
+    Frame::new().fill(pal.surface).corner_radius(10).inner_margin(Margin::same(12)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(trf!("{}  Änderungen parken" | "{}  Park changes", ic::ARCHIVE)).font(widgets::bold_font(13.0)).color(pal.bright));
+        ui.label(egui::RichText::new(tr!("Legt deine ungesicherten Änderungen beiseite – danach ist alles wieder auf dem letzten Commit. Mit einem Klick holst du sie zurück." | "Puts your uncommitted changes aside – everything is back at the last commit. One click brings them back.")).font(widgets::ui_font(11.5)).color(pal.subtext));
+        ui.add_space(6.0);
+        if n == 0 {
+            ui.label(egui::RichText::new(trf!("{}  Gerade gibt es nichts zu parken." | "{}  Nothing to park right now.", ic::CHECK)).font(widgets::ui_font(11.5)).color(pal.green));
+        } else {
+            let te = ui.add(egui::TextEdit::singleline(&mut msg).hint_text(tr!("Wofür? z. B. Idee für Kapitel 4 (optional)" | "What for? e.g. idea for chapter 4 (optional)")).desired_width(f32::INFINITY));
+            if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                park = true;
+            }
+            ui.add_space(4.0);
+            if widgets::button(ui, ic::ARCHIVE, &trf!("{n} Änderung(en) parken" | "Park {n} change(s)"), pal, BtnKind::Secondary).clicked() {
+                park = true;
+            }
+        }
+    });
+    if park && n > 0 {
+        app.save_all();
+        let r = app.git.stash_push(root, &msg);
+        if r.is_ok() {
+            msg.clear();
+        }
+        app.git_done(r, true, now);
+    }
+    ui.data_mut(|d| d.insert_temp(id, msg));
+    ui.add_space(14.0);
+
+    let stashes = app.git.stashes.clone();
+    widgets::section_label(ui, &trf!("Geparkt ({})" | "Parked ({})", stashes.len()), pal);
+    if stashes.is_empty() {
+        ui.add_space(16.0);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(ic::ARCHIVE).font(widgets::ui_font(30.0)).color(with_alpha(pal.dim, 140)));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tr!("Nichts geparkt" | "Nothing parked")).font(widgets::bold_font(13.0)).color(pal.subtext));
+            ui.label(egui::RichText::new(tr!("Beim Branch-Wechsel parkt nEdit offene Änderungen automatisch hier." | "When switching branches nEdit parks open changes here automatically.")).font(widgets::ui_font(11.0)).color(pal.dim));
+        });
+        return;
+    }
+    let viewing = match &app.git.view {
+        Some(crate::git::GitView::Stash(r)) => Some(r.clone()),
+        _ => None,
+    };
+    let mut act = None;
+    for (i, s) in stashes.iter().enumerate() {
+        stash_card(app, ui, pal, s, i, viewing.as_deref() == Some(s.refname.as_str()), &mut act);
+        ui.add_space(8.0);
+    }
+    match act {
+        Some(StashAction::Restore(r, keep)) => {
+            app.save_all();
+            let res = crate::git::GitState::stash_apply(root, &r, keep);
+            app.git_done(res, true, now);
+        }
+        Some(StashAction::View(r)) => app.git.open_stash(root, &r),
+        Some(StashAction::Drop(refname, title)) => app.dialog = Some(crate::app::Dialog::GitDropStash { refname, title }),
+        None => {}
+    }
+}
+
+fn stash_card(app: &App, ui: &mut Ui, pal: &Palette, s: &crate::git::Stash, index: usize, viewing: bool, act: &mut Option<StashAction>) {
+    let col = widgets::color_for(&s.branch, pal);
+    let stroke = if viewing { Stroke::new(1.2, pal.accent) } else { Stroke::new(1.0, with_alpha(pal.border, 120)) };
+    let frame = Frame::new().fill(pal.surface).stroke(stroke).corner_radius(10).inner_margin(Margin { left: 16, right: 10, top: 10, bottom: 10 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        // title + age
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        let age = ui.painter().text(row.right_center(), Align2::RIGHT_CENTER, crate::git::relative_time(s.time), widgets::ui_font(11.0), pal.dim);
+        let maxc = ((age.min.x - row.min.x - 8.0) / 7.0).max(6.0) as usize;
+        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, truncate(&s.title(), maxc), widgets::bold_font(13.0), pal.bright);
+        ui.add_space(4.0);
+        // where it was parked
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            widgets::badge(ui, &format!("{}  {}", ic::BRANCH, truncate(&s.branch, 18)), col);
+            if s.auto {
+                widgets::badge(ui, tr!("automatisch" | "automatic"), pal.magenta).on_hover_text(tr!("Beim Branch-Wechsel geparkt – kommt beim Zurückwechseln von selbst zurück." | "Parked on a branch switch – comes back by itself when switching back."));
+            }
+            if index == 0 && app.git.stashes.len() > 1 {
+                widgets::badge(ui, tr!("neueste" | "newest"), pal.dim);
+            }
+        });
+        ui.add_space(6.0);
+        // size
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, trf!("{} Datei(en)" | "{} file(s)", s.files.len()), widgets::ui_font(11.0), pal.subtext);
+        diffstat(ui.painter(), row.right_center(), s.added(), s.deleted(), pal);
+        ui.add_space(4.0);
+        // files
+        for f in s.files.iter().take(4) {
+            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+            let fcol = widgets::git_color(f.code, pal);
+            ui.painter().text(row.left_center() + vec2(2.0, 0.0), Align2::LEFT_CENTER, f.code.to_string(), widgets::mono_font(11.0), fcol);
+            let counts = ui.painter().text(row.right_center(), Align2::RIGHT_CENTER, format!("+{} −{}", f.added, f.deleted), widgets::mono_font(10.5), pal.dim);
+            let maxc = ((counts.min.x - row.min.x - 24.0) / 6.4).max(6.0) as usize;
+            let name = if f.path.chars().count() > maxc { format!("…{}", f.path.chars().rev().take(maxc - 1).collect::<Vec<_>>().into_iter().rev().collect::<String>()) } else { f.path.clone() };
+            ui.painter().text(row.left_center() + vec2(16.0, 0.0), Align2::LEFT_CENTER, name, widgets::ui_font(11.5), pal.text);
+        }
+        if s.files.len() > 4 {
+            ui.label(egui::RichText::new(trf!("+ {} weitere" | "+ {} more", s.files.len() - 4)).font(widgets::ui_font(11.0)).color(pal.dim));
+        }
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let other = s.branch != app.git.branch;
+            let tip = if other {
+                trf!("Holt die Änderungen auf {} zurück (geparkt wurden sie auf {}) und entfernt sie aus der Liste." | "Brings the changes back onto {} (they were parked on {}) and removes them from the list.", app.git.branch, s.branch)
+            } else {
+                tr!("Holt die Änderungen zurück und entfernt sie aus der Liste." | "Brings the changes back and removes them from the list.").to_string()
+            };
+            if widgets::chip(ui, ic::UNDO, tr!("Zurückholen" | "Restore"), true, pal.accent, pal).on_hover_text(tip).clicked() {
+                *act = Some(StashAction::Restore(s.refname.clone(), false));
+            }
+            if widgets::icon_button_sized(ui, ic::COPY, tr!("Anwenden: Änderungen übernehmen, aber geparkt lassen (z. B. um sie auf mehreren Branches zu nutzen)" | "Apply: take over the changes but keep them parked (e.g. to use them on several branches)"), pal, false, 26.0).clicked() {
+                *act = Some(StashAction::Restore(s.refname.clone(), true));
+            }
+            if widgets::icon_button_sized(ui, ic::EYE, tr!("Änderungen ansehen" | "View changes"), pal, viewing, 26.0).clicked() {
+                *act = Some(StashAction::View(s.refname.clone()));
+            }
+            if widgets::icon_button_sized(ui, ic::TRASH, tr!("Löschen …" | "Delete …"), pal, false, 26.0).clicked() {
+                *act = Some(StashAction::Drop(s.refname.clone(), s.title()));
+            }
+        });
+    });
+    // branch colour rail on the left
+    let r = frame.response.rect;
+    ui.painter().rect_filled(Rect::from_min_max(r.min + vec2(1.0, 1.0), pos2(r.min.x + 5.0, r.max.y - 1.0)), egui::CornerRadius { nw: 9, sw: 9, ne: 0, se: 0 }, col);
 }
 
 fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
@@ -1828,6 +2591,10 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         crate::git::GitView::Commit(h) => {
             let info = app.git.log.iter().find(|x| &x.hash == h).map(|x| format!("{}  ·  {}  ·  {}", x.short, x.author, crate::git::relative_time(x.time))).unwrap_or_default();
             (ic::HISTORY, info)
+        }
+        crate::git::GitView::Stash(r) => {
+            let info = app.git.stashes.iter().find(|s| &s.refname == r).map(|s| trf!("Geparkt auf {}  ·  {}  ·  {}" | "Parked on {}  ·  {}  ·  {}", s.branch, crate::git::relative_time(s.time), r)).unwrap_or_default();
+            (ic::ARCHIVE, info)
         }
     };
     c.label(egui::RichText::new(icon).font(widgets::ui_font(16.0)).color(pal.accent));
@@ -1850,6 +2617,17 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
                 app.open_file(&p, t);
             }
         }
+        if let crate::git::GitView::Stash(r) = &view {
+            if widgets::button(ui, ic::TRASH, tr!("Löschen" | "Delete"), pal, BtnKind::Danger).clicked() {
+                let title = app.git.view_title.clone();
+                app.dialog = Some(crate::app::Dialog::GitDropStash { refname: r.clone(), title });
+            }
+            if widgets::button(ui, ic::UNDO, tr!("Zurückholen" | "Restore"), pal, BtnKind::Primary).clicked() {
+                app.save_all();
+                let res = crate::git::GitState::stash_apply(&root, r, false);
+                app.git_done(res, true, 0.0);
+            }
+        }
     });
     if app.git.view.is_none() {
         return;
@@ -1869,8 +2647,12 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
         app.settings.diff_split = true;
         app.settings.save();
     }
-    // files of a commit, each restorable
-    if let crate::git::GitView::Commit(h) = &view {
+    // files of a commit (each restorable) or of a parked state
+    let commit = match &view {
+        crate::git::GitView::Commit(h) => Some(h.clone()),
+        _ => None,
+    };
+    if !matches!(view, crate::git::GitView::WorkingFile(_)) {
         if !app.git.view_files.is_empty() {
             Frame::new().inner_margin(Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -1884,8 +2666,10 @@ fn git_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab) {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(&f.code[..1]).font(widgets::mono_font(11.5)).color(col));
                                 ui.label(egui::RichText::new(&f.path).font(widgets::ui_font(12.0)).color(pal.text));
-                                if !f.code.starts_with('D') && widgets::icon_button_sized(ui, ic::UNDO, tr!("Datei auf diesen Stand zurücksetzen" | "Reset file to this state"), pal, false, 22.0).clicked() {
-                                    app.dialog = Some(crate::app::Dialog::GitRestore { hash: h.clone(), path: f.path.clone() });
+                                if let Some(h) = &commit {
+                                    if !f.code.starts_with('D') && widgets::icon_button_sized(ui, ic::UNDO, tr!("Datei auf diesen Stand zurücksetzen" | "Reset file to this state"), pal, false, 22.0).clicked() {
+                                        app.dialog = Some(crate::app::Dialog::GitRestore { hash: h.clone(), path: f.path.clone() });
+                                    }
                                 }
                             });
                         });

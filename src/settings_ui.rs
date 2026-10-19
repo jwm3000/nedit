@@ -1,7 +1,7 @@
 //! Settings window: navigation on the left, pages on the right, theme gallery with live
 //! previews of every theme.
 
-use crate::app::{App, Dialog};
+use crate::app::{truncate, App, Dialog};
 use crate::icons as ic;
 use crate::theme::{self, mix, with_alpha, Palette};
 use crate::widgets;
@@ -603,6 +603,10 @@ impl App {
             self.recheck_deps(ctx);
             return;
         }
+        // Windows: everything needed to compile, downloaded right here
+        if cfg!(windows) || self.winsetup.is_some() {
+            self.windows_setup_card(ui, pal);
+        }
         for (title, required) in [(tr!("Benötigt" | "Required"), true), (tr!("Optional" | "Optional"), false)] {
             heading(ui, pal, title);
             card(ui, pal, |ui| {
@@ -1081,6 +1085,80 @@ impl App {
 }
 
 /// A copyable command in a mono box.
+impl App {
+    /// "Set up TeX for Windows": TinyTeX + template packages + Poppler, without admin rights.
+    fn windows_setup_card(&mut self, ui: &mut Ui, pal: &Palette) {
+        use crate::winsetup::{self, Progress};
+        let base = winsetup::base_dir();
+        let ready = winsetup::tinytex_installed(&base) && winsetup::poppler_bin(&base).is_some();
+        heading(ui, pal, tr!("TeX für Windows einrichten" | "Set up TeX for Windows"));
+        let mut start = false;
+        card(ui, pal, |ui| {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tr!(
+                    "nEdit lädt alles, was zum Kompilieren nötig ist, direkt herunter – ohne Administratorrechte und ohne Installer:" | "nEdit downloads everything needed to compile right here – no admin rights, no installer:"
+                ))
+                .color(pal.text),
+            );
+            ui.add_space(4.0);
+            for (what, why, size) in [
+                ("TinyTeX", tr!("pdflatex, latexmk, tlmgr und ein eigenes Perl" | "pdflatex, latexmk, tlmgr and its own Perl"), "74 MB"),
+                (tr!("Vorlagen-Pakete" | "Template packages"), tr!("KOMA-Script, biblatex, Beamer … sowie biber und synctex" | "KOMA-Script, biblatex, Beamer … plus biber and synctex"), "35 MB"),
+                ("Poppler", tr!("PDF-Vorschau" | "PDF preview"), "41 MB"),
+            ] {
+                // name and size on one line, the description below (wraps in narrow windows)
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(ic::CHECK).font(widgets::ui_font(11.0)).color(pal.accent));
+                    ui.label(egui::RichText::new(what).font(widgets::bold_font(12.5)).color(pal.bright));
+                    ui.label(egui::RichText::new(size).font(widgets::mono_font(11.5)).color(pal.dim));
+                });
+                ui.indent(("winsetup-why", what), |ui| {
+                    ui.label(egui::RichText::new(why).font(widgets::ui_font(12.0)).color(pal.subtext));
+                });
+                ui.add_space(2.0);
+            }
+            ui.label(egui::RichText::new(trf!("Ziel: {}" | "Target: {}", base.display())).font(widgets::mono_font(11.0)).color(pal.dim));
+            ui.add_space(8.0);
+            match &self.winsetup {
+                Some(s) if s.running() => {
+                    let (title, frac, detail) = match &s.current {
+                        Progress::Download(t, d, total) => (t.clone(), (*total > 0).then(|| *d as f32 / *total as f32), format!("{:.1} / {:.1} MB", *d as f32 / 1e6, *total as f32 / 1e6)),
+                        Progress::Step(t) => (t.clone(), None, s.lines.last().cloned().unwrap_or_default()),
+                        _ => (String::new(), None, String::new()),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(egui::RichText::new(title).font(widgets::bold_font(13.0)).color(pal.bright));
+                    });
+                    if let Some(f) = frac {
+                        ui.add(egui::ProgressBar::new(f).text(detail));
+                    } else if !detail.is_empty() {
+                        ui.label(egui::RichText::new(truncate(&detail, 90)).font(widgets::mono_font(11.0)).color(pal.subtext));
+                    }
+                }
+                Some(s) if matches!(s.finished, Some(Err(_))) => {
+                    if let Some(Err(e)) = &s.finished {
+                        ui.label(egui::RichText::new(format!("{}  {e}", ic::WARN)).color(pal.red));
+                    }
+                    start = widgets::button(ui, ic::REFRESH, tr!("Erneut versuchen" | "Try again"), pal, widgets::BtnKind::Primary).clicked();
+                }
+                _ if ready => {
+                    ui.label(egui::RichText::new(trf!("{}  Eingerichtet – nEdit nutzt diese Werkzeuge automatisch." | "{}  Set up – nEdit uses these tools automatically.", ic::CHECK_CIRCLE)).color(pal.green));
+                    start = widgets::button(ui, ic::REFRESH, tr!("Pakete aktualisieren" | "Update packages"), pal, widgets::BtnKind::Secondary).clicked();
+                }
+                _ => {
+                    start = widgets::button(ui, ic::DOWNLOAD, tr!("Jetzt einrichten (≈ 150 MB)" | "Set up now (≈ 150 MB)"), pal, widgets::BtnKind::Primary).clicked();
+                }
+            }
+            ui.add_space(4.0);
+        });
+        if start {
+            self.winsetup = Some(winsetup::start(ui.ctx()));
+        }
+    }
+}
+
 fn command_box(ui: &mut Ui, pal: &Palette, cmd: &str, ctx: &egui::Context) {
     let w = ui.available_width();
     let font = widgets::mono_font(12.0);

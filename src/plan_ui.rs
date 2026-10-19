@@ -49,17 +49,33 @@ fn ring(ui: &mut Ui, frac: f32, label: &str, color: Color32, pal: &Palette) {
     ui.painter().text(c, Align2::CENTER_CENTER, label, widgets::bold_font(10.5), pal.bright);
 }
 
-/// A rounded stat card in the header.
-fn stat(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .fill(mix(pal.surface, pal.base, 0.3))
-        .stroke(Stroke::new(1.0, with_alpha(pal.border, 110)))
-        .corner_radius(12)
-        .inner_margin(egui::Margin::symmetric(14, 8))
-        .show(ui, |ui| {
-            ui.set_height(48.0);
-            ui.horizontal_centered(|ui| add(ui));
-        });
+/// Height of a header card (48 content + margins + stroke).
+const CARD_H: f32 = 66.0;
+
+/// A rounded stat card in the header with a fixed width, so the header row can wrap
+/// instead of squeezing the last card (and widening the whole page) in narrow windows.
+fn stat(ui: &mut Ui, pal: &Palette, width: f32, add: impl FnOnce(&mut Ui)) {
+    ui.allocate_ui(vec2(width, CARD_H), |ui| {
+        egui::Frame::new()
+            .fill(mix(pal.surface, pal.base, 0.3))
+            .stroke(Stroke::new(1.0, with_alpha(pal.border, 110)))
+            .corner_radius(12)
+            .inner_margin(egui::Margin::symmetric(14, 8))
+            .show(ui, |ui| {
+                ui.set_width(width - 30.0);
+                ui.set_height(48.0);
+                // long texts are cut off with "…" instead of growing the card
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                ui.horizontal_centered(|ui| add(ui));
+            });
+    });
+}
+
+/// Screenshot/test runs (NEDIT_SHOT) click widgets by their last position.
+fn debug_rect(ui: &Ui, key: &str, r: Rect) {
+    if std::env::var_os("NEDIT_SHOT").is_some() {
+        ui.ctx().data_mut(|d| d.insert_temp(Id::new(key), r));
+    }
 }
 
 fn chip(ui: &mut Ui, text: &str, color: Color32) -> egui::Response {
@@ -113,10 +129,10 @@ impl App {
         }
 
         // ── header: deadline, progress, words ──
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
             // deadline
-            stat(ui, &pal, |ui| {
+            stat(ui, &pal, 240.0, |ui| {
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(tr!("ABGABE" | "SUBMISSION")).font(widgets::ui_font(10.0)).color(pal.dim).extra_letter_spacing(1.0));
                     if let Some(s) = &mut self.plan_ui.deadline_edit {
@@ -150,7 +166,7 @@ impl App {
             // tasks progress
             let total = self.plan.tasks.len();
             let done = self.plan.tasks.iter().filter(|t| t.done).count();
-            stat(ui, &pal, |ui| {
+            stat(ui, &pal, 220.0, |ui| {
                 let f = if total == 0 { 0.0 } else { done as f32 / total as f32 };
                 ring(ui, f, &format!("{:.0}%", f * 100.0), pal.green, &pal);
                 ui.vertical(|ui| {
@@ -159,7 +175,7 @@ impl App {
                 });
             });
             // words
-            stat(ui, &pal, |ui| {
+            stat(ui, &pal, 260.0, |ui| {
                 let goal = self.plan.word_goal.unwrap_or(0);
                 let f = if goal == 0 { 0.0 } else { words as f32 / goal as f32 };
                 ring(ui, f, &format!("{:.0}%", (f * 100.0).min(999.0)), pal.accent, &pal);
@@ -175,7 +191,9 @@ impl App {
                         }
                     } else {
                         let t = if goal > 0 { format!("{words} / {goal}") } else { format!("{words}  ·  {}", tr!("Ziel setzen" | "set a goal")) };
-                        if ui.add(egui::Label::new(egui::RichText::new(t).font(widgets::bold_font(13.5)).color(pal.bright)).sense(Sense::click())).on_hover_text(tr!("Klicken: Wortziel setzen" | "Click: set a word goal")).clicked() {
+                        let l = ui.add(egui::Label::new(egui::RichText::new(t).font(widgets::bold_font(13.5)).color(pal.bright)).sense(Sense::click()));
+                        debug_rect(ui, "dbg-goal-rect", l.rect);
+                        if l.on_hover_text(tr!("Klicken: Wortziel setzen" | "Click: set a word goal")).clicked() {
                             self.plan_ui.goal_edit = Some(goal.to_string());
                         }
                     }
@@ -183,7 +201,7 @@ impl App {
             });
             // pages of the compiled thesis
             let pages = self.thesis.viewer.page_count();
-            stat(ui, &pal, |ui| {
+            stat(ui, &pal, 230.0, |ui| {
                 let goal = self.plan.page_goal.unwrap_or(0);
                 let f = if goal == 0 { 0.0 } else { pages as f32 / goal as f32 };
                 ring(ui, f, &format!("{:.0}%", (f * 100.0).min(999.0)), pal.cyan, &pal);
@@ -199,14 +217,16 @@ impl App {
                         }
                     } else {
                         let t = if goal > 0 { format!("{pages} / {goal}") } else { format!("{pages}  ·  {}", tr!("Ziel setzen" | "set a goal")) };
-                        if ui.add(egui::Label::new(egui::RichText::new(t).font(widgets::bold_font(13.5)).color(pal.bright)).sense(Sense::click())).on_hover_text(tr!("Klicken: Seitenziel setzen" | "Click: set a page goal")).clicked() {
+                        let l = ui.add(egui::Label::new(egui::RichText::new(t).font(widgets::bold_font(13.5)).color(pal.bright)).sense(Sense::click()));
+                        debug_rect(ui, "dbg-page-rect", l.rect);
+                        if l.on_hover_text(tr!("Klicken: Seitenziel setzen" | "Click: set a page goal")).clicked() {
                             self.plan_ui.page_goal_edit = Some(goal.to_string());
                         }
                     }
                 });
             });
             // pomodoro tomato
-            self.pomodoro_card(ui, &pal, now);
+            ui.allocate_ui(vec2(300.0, CARD_H), |ui| self.pomodoro_card(ui, &pal, now));
         });
         ui.add_space(14.0);
 
@@ -237,7 +257,8 @@ impl App {
                     let add_clicked = ui
                         .with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                             let b = widgets::button(ui, ic::PLUS, tr!("Hinzufügen" | "Add"), &pal, widgets::BtnKind::Primary).clicked();
-                            ui.add(egui::TextEdit::singleline(&mut self.plan_ui.input).id(Id::new("plan-capture")).hint_text(hint).font(widgets::ui_font(14.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
+                            let te = ui.add(egui::TextEdit::singleline(&mut self.plan_ui.input).id(Id::new("plan-capture")).hint_text(hint).font(widgets::ui_font(14.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
+                            debug_rect(ui, "dbg-capture-rect", te.rect);
                             b
                         })
                         .inner;

@@ -28,11 +28,14 @@ mod slides;
 mod smart;
 mod shelf_ui;
 mod templates;
+mod texpkg;
+mod fixes;
 mod theme;
 mod updater;
 mod vim;
 mod visual;
 mod widgets;
+mod winsetup;
 mod workspace;
 
 /// Window icon (taskbar / title bar); on Linux the desktop file's icon is used as well.
@@ -50,6 +53,7 @@ fn app_icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     updater::cleanup(); // also records our executable path before any update
+    winsetup::add_to_path(); // Windows: TeX tools nEdit set up itself
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("nEdit {}", updater::VERSION);

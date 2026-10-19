@@ -59,7 +59,7 @@ impl Pm {
         }
     }
 
-    fn install_cmd(self, pkgs: &[&str]) -> String {
+    pub(crate) fn install_cmd(self, pkgs: &[&str]) -> String {
         let p = pkgs.join(" ");
         match self {
             Pm::Pacman => format!("sudo pacman -S --needed {p}"),

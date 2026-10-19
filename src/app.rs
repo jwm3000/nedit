@@ -109,6 +109,8 @@ pub struct Workspace {
     pub job: Option<CompileJob>,
     pub queued: bool,
     pub issues: Vec<Issue>,
+    /// suggestions for the errors of the last run
+    pub fixes: Vec<crate::fixes::Fix>,
     pub last_ok: Option<bool>,
     pub last_secs: f32,
     pub raw_log: String,
@@ -133,6 +135,7 @@ impl Workspace {
             job: None,
             queued: false,
             issues: vec![],
+            fixes: vec![],
             last_ok: None,
             last_secs: 0.0,
             raw_log: String::new(),
@@ -149,6 +152,12 @@ impl Workspace {
     pub fn warnings(&self) -> usize {
         self.issues.iter().filter(|i| i.level == Level::Warning).count()
     }
+}
+
+pub struct TexInstall {
+    pub done: std::path::PathBuf,
+    pub tab: Tab,
+    pub command: String,
 }
 
 pub struct Toast {
@@ -185,6 +194,13 @@ pub enum Dialog {
     GitRestore { hash: String, path: String },
     /// Revert changes of these paths (files or folders, "" = everything) to the last commit.
     GitRevert { paths: Vec<String> },
+    /// Switch branch while there are uncommitted changes: park or take them along.
+    GitSwitch { target: crate::git::SwitchTarget },
+    GitDeleteBranch { name: String, merged: bool },
+    GitDropStash { refname: String, title: String },
+    GitMergePr { number: u64, title: String, squash: bool, delete_branch: bool },
+    /// Search and install TeX packages.
+    TexPackages { query: String },
     Update,
 }
 
@@ -271,6 +287,10 @@ pub struct App {
     fig_index: HashMap<String, (u64, HashMap<String, (egui::TextureId, egui::Vec2)>)>,
     /// System check (TeX components, tools) – runs in the background at start.
     pub deps: Option<crate::deps::Report>,
+    /// TeX packages being installed in a terminal window
+    pub tex_install: Option<TexInstall>,
+    /// Windows: TeX being set up by nEdit itself
+    pub winsetup: Option<crate::winsetup::Setup>,
     deps_rx: Option<std::sync::mpsc::Receiver<crate::deps::Report>>,
     pub settings_open: bool,
     pub settings_page: crate::settings_ui::Page,
@@ -360,6 +380,8 @@ impl App {
             figs: Default::default(),
             fig_index: Default::default(),
             deps: None,
+            tex_install: None,
+            winsetup: None,
             deps_rx: None,
             settings_open: false,
             settings_page: Default::default(),
@@ -678,6 +700,60 @@ impl App {
         self.rebuild_indexes();
     }
 
+    /// After git rewrote the working tree (switch, pull, stash …): editors, file tree and
+    /// indexes follow the disk. Callers save all buffers before the git operation.
+    pub fn git_files_changed(&mut self, now: f64) {
+        let open: Vec<String> = self.buffers.iter().map(|b| b.rel.clone()).collect();
+        self.sync_buffers_with_disk(&open);
+        if matches!(self.git.view, Some(crate::git::GitView::WorkingFile(_)) | Some(crate::git::GitView::Stash(_))) {
+            self.git.view = None;
+        }
+        let root = self.project.root.clone();
+        self.git.refresh(&root, now);
+        self.refresh_tree();
+        self.rebuild_indexes();
+    }
+
+    /// Report the result of a local git operation and update what depends on it.
+    pub fn git_done(&mut self, r: Result<String, String>, files: bool, now: f64) {
+        match r {
+            Ok(m) if m.is_empty() => {}
+            Ok(m) => {
+                let g = self.pal.green;
+                self.toast(ic::GIT, m, g, now);
+            }
+            Err(e) => {
+                let red = self.pal.red;
+                self.toast(ic::WARN, format!("Git: {}", truncate(&e, 140)), red, now);
+            }
+        }
+        if files {
+            self.git_files_changed(now);
+        } else {
+            let root = self.project.root.clone();
+            self.git.refresh(&root, now);
+        }
+    }
+
+    /// Switch branch or check out a pull request. With uncommitted changes the user is
+    /// asked first (unless `park` was already decided).
+    pub fn git_switch(&mut self, target: crate::git::SwitchTarget, park: Option<bool>, ctx: &egui::Context, now: f64) {
+        self.save_all();
+        let root = self.project.root.clone();
+        self.git.refresh_status(&root, now);
+        let Some(park) = park.or(self.git.changes.is_empty().then_some(false)) else {
+            self.dialog = Some(Dialog::GitSwitch { target });
+            return;
+        };
+        match target {
+            crate::git::SwitchTarget::Branch(b) => {
+                let r = self.git.switch_branch(&root, &b, park);
+                self.git_done(r, true, now);
+            }
+            crate::git::SwitchTarget::Pr(n) => self.git.checkout_pr(&root, n, park, ctx.clone()),
+        }
+    }
+
     /// Create the git repository for this project.
     pub fn git_init(&mut self, now: f64) {
         let root = self.project.root.clone();
@@ -898,7 +974,69 @@ impl App {
         ws.job = Some(compile::start(spec, ctx.clone()));
     }
 
+    /// Carry out a suggestion: edit the sources and recompile, or install in a terminal.
+    pub fn apply_fix(&mut self, t: Tab, fix: crate::fixes::Fix, ctx: &egui::Context, now: f64) {
+        use crate::fixes::FixAction;
+        match &fix.action {
+            FixAction::Preamble { .. } | FixAction::Replace { .. } => {
+                self.save_all();
+                let root = self.project.root.clone();
+                match crate::fixes::apply(&root, &fix.action) {
+                    Ok(file) => {
+                        self.sync_buffers_with_disk(std::slice::from_ref(&file));
+                        let g = self.pal.green;
+                        self.toast(ic::MAGIC, trf!("{file} angepasst – kompiliere neu" | "{file} updated – recompiling"), g, now);
+                        self.ws_mut(t).fixes.clear();
+                        self.compile(t, ctx);
+                    }
+                    Err(e) => {
+                        let r = self.pal.red;
+                        self.toast(ic::WARN, e, r, now);
+                    }
+                }
+            }
+            FixAction::Install { command } => self.install_tex(t, command.clone(), ctx, now),
+            FixAction::None => {}
+        }
+    }
+
+    /// Run an install command in a terminal; recompile when it has finished.
+    pub fn install_tex(&mut self, t: Tab, command: String, ctx: &egui::Context, now: f64) {
+        let done = std::env::temp_dir().join(format!("nedit-install-{}.done", std::process::id()));
+        match crate::texpkg::install_in_terminal(&command, &done) {
+            Ok(()) => {
+                let a = self.pal.accent;
+                self.toast(ic::TERMINAL, tr!("Installation läuft im Terminal – nEdit kompiliert danach neu" | "Installing in a terminal – nEdit recompiles afterwards"), a, now);
+                self.tex_install = Some(TexInstall { done, tab: t, command });
+            }
+            Err(e) => {
+                ctx.copy_text(command.clone());
+                let y = self.pal.yellow;
+                self.toast(ic::COPY, trf!("{e} – Befehl kopiert: {command}" | "{e} – command copied: {command}"), y, now);
+            }
+        }
+    }
+
+    fn poll_tex_install(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(inst) = &self.tex_install else { return };
+        ctx.request_repaint_after(std::time::Duration::from_millis(700));
+        let Some(code) = crate::texpkg::install_finished(&inst.done) else { return };
+        let _ = std::fs::remove_file(&inst.done);
+        let t = inst.tab;
+        self.tex_install = None;
+        if code == 0 {
+            let g = self.pal.green;
+            self.toast(ic::CHECK_CIRCLE, tr!("Installiert – kompiliere neu" | "Installed – recompiling"), g, now);
+            self.deps = None;
+            self.compile(t, ctx);
+        } else {
+            let r = self.pal.red;
+            self.toast(ic::WARN, trf!("Installation abgebrochen (Code {code})" | "Installation failed (code {code})"), r, now);
+        }
+    }
+
     fn poll_jobs(&mut self, ctx: &egui::Context, now: f64) {
+        self.poll_tex_install(ctx, now);
         for t in [Tab::Thesis, Tab::Slides] {
             let res = self.ws(t).job.as_ref().and_then(|j| j.rx.try_recv().ok());
             if let Some(r) = res {
@@ -906,6 +1044,7 @@ impl App {
                 let ws = self.ws_mut(t);
                 ws.job = None;
                 ws.issues = r.issues;
+                ws.fixes = r.fixes;
                 ws.raw_log = r.raw_log;
                 ws.last_ok = Some(r.ok && errors == 0);
                 ws.last_secs = r.duration.as_secs_f32();
@@ -921,6 +1060,11 @@ impl App {
                     let name = if t == Tab::Slides { tr!("Präsentation" | "Presentation") } else { tr!("Masterarbeit" | "Thesis") };
                     let red = self.pal.red;
                     self.toast(ic::ERROR, trf!("{name}: {errors} Fehler beim Kompilieren" | "{name}: {errors} compile error(s)"), red, now);
+                    if let Some(f) = self.ws(t).fixes.first() {
+                        let msg = trf!("Vorschlag: {} – im Protokoll beheben" | "Suggestion: {} – fix it in the log", truncate(&f.title, 60));
+                        let a = self.pal.accent;
+                        self.toast(ic::MAGIC, msg, a, now);
+                    }
                 }
                 if self.ws(t).queued {
                     self.ws_mut(t).queued = false;
@@ -1093,6 +1237,22 @@ impl App {
                 self.deps_rx = None;
             }
         }
+        if self.winsetup.as_mut().is_some_and(|s| s.poll()) {
+            match self.winsetup.as_ref().and_then(|s| s.finished.clone()) {
+                Some(Ok(())) => {
+                    let g = self.pal.green;
+                    self.toast(ic::CHECK_CIRCLE, tr!("TeX ist eingerichtet – kompiliere" | "TeX is set up – compiling"), g, now);
+                    self.deps = None;
+                    self.compile(Tab::Thesis, ctx);
+                    self.compile(Tab::Slides, ctx);
+                }
+                Some(Err(e)) => {
+                    let r = self.pal.red;
+                    self.toast(ic::WARN, truncate(&e, 140), r, now);
+                }
+                None => {}
+            }
+        }
         if !self.update_started && now > 4.0 && self.settings.update_check && std::env::var_os("NEDIT_SHOT").is_none() {
             self.update_started = true;
             self.updater.check(false, ctx);
@@ -1105,25 +1265,17 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
         if let Some(r) = self.git.poll() {
-            match r {
-                Ok(m) => {
-                    let g = self.pal.green;
-                    self.git.status = m.clone();
-                    self.toast(ic::GIT, m, g, now);
-                }
-                Err(e) => {
-                    let red = self.pal.red;
-                    self.git.status = e.clone();
-                    self.toast(ic::WARN, format!("Git: {}", truncate(&e, 90)), red, now);
-                }
-            }
-            let root = self.project.root.clone();
-            self.git.refresh(&root, now);
+            self.git.status = match &r {
+                Ok(m) | Err(m) => m.clone(),
+            };
+            let files = self.git.touched_files;
+            self.git_done(r, files, now);
         }
+        self.git.poll_prs();
         // git status: in the background every second, immediately after file changes
         if self.git.poll_status() && self.side == SideMode::Git {
             let root = self.project.root.clone();
-            self.git.refresh_log(&root);
+            self.git.refresh_details(&root);
         }
         if now - self.git.last_refresh > 1.0 && !self.git.busy && self.git.git_available {
             let root = self.project.root.clone();
@@ -1431,6 +1583,35 @@ impl eframe::App for App {
                             47 => raw.events.extend([egui::Event::PointerMoved(far), egui::Event::PointerButton { pos: far, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
                             48 => raw.events.push(egui::Event::PointerButton { pos: far, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }),
                             54 => eprintln!("EDIT click: editing={} text={:?}", self.plan_debug_editing(), text(self)),
+                            _ => {}
+                        }
+                        self.debug_typed += 1;
+                    }
+                    if name.contains("goaltest") && self.debug_typed < 21060 {
+                        // set the word goal and the page goal by clicking, typing and Enter
+                        if self.debug_typed < 21000 {
+                            self.debug_typed = 21000;
+                        }
+                        let k = self.debug_typed - 21000;
+                        let key = |key: egui::Key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+                        let rect = |n: &str| ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(n)));
+                        let click = |raw: &mut egui::RawInput, r: Option<egui::Rect>, down: bool| {
+                            if let Some(r) = r {
+                                raw.events.push(egui::Event::PointerMoved(r.center()));
+                                raw.events.push(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed: down, modifiers: egui::Modifiers::NONE });
+                            }
+                        };
+                        match k {
+                            1 => click(raw, rect("dbg-goal-rect"), true),
+                            2 => click(raw, rect("dbg-goal-rect"), false),
+                            5 => raw.events.push(egui::Event::Text("20000".into())),
+                            7 => raw.events.push(key(egui::Key::Enter)),
+                            10 => eprintln!("GOAL words: word_goal={:?} focus={:?}", self.plan.word_goal, ctx.memory(|m| m.focused())),
+                            12 => click(raw, rect("dbg-page-rect"), true),
+                            13 => click(raw, rect("dbg-page-rect"), false),
+                            16 => raw.events.push(egui::Event::Text("80".into())),
+                            18 => raw.events.push(key(egui::Key::Enter)),
+                            21 => eprintln!("GOAL pages: page_goal={:?}", self.plan.page_goal),
                             _ => {}
                         }
                         self.debug_typed += 1;
@@ -2140,6 +2321,10 @@ impl App {
                             }
                             ui.add_space(10.0);
                         }
+                        if let Some(inst) = &self.tex_install {
+                            ui.label(small(trf!("{} Installiere im Terminal …" | "{} Installing in a terminal …", ic::TERMINAL), pal.accent)).on_hover_text(&inst.command);
+                            ui.add_space(10.0);
+                        }
                         // missing TeX components → open the system page
                         if let Some(n) = self.deps.as_ref().map(|d| d.missing_required()).filter(|n| *n > 0) {
                             let txt = trf!("{} {n} TeX-Komponente(n) fehlen" | "{} {n} TeX component(s) missing", ic::WARN);
@@ -2267,6 +2452,224 @@ impl App {
                             }
                         });
                     }
+                }
+                Dialog::GitSwitch { target } => {
+                    let to = match target {
+                        crate::git::SwitchTarget::Branch(b) => b.local_name().to_string(),
+                        crate::git::SwitchTarget::Pr(n) => format!("PR #{n}"),
+                    };
+                    let n = self.git.changes.len();
+                    ui.label(egui::RichText::new(trf!("Zu {to} wechseln" | "Switch to {to}")).font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.add_space(6.0);
+                    ui.label(trf!("Auf {} gibt es {n} ungesicherte Änderung(en). Was soll mit ihnen passieren?" | "There are {n} uncommitted change(s) on {}. What should happen to them?", self.git.branch));
+                    ui.add_space(10.0);
+                    let mut choice = None;
+                    let option = |ui: &mut egui::Ui, icon: &str, title: &str, sub: &str, primary: bool| {
+                        let fill = if primary { with_alpha(pal.accent, 26) } else { pal.base };
+                        let r = egui::Frame::new().fill(fill).corner_radius(10).stroke(Stroke::new(1.0, if primary { with_alpha(pal.accent, 120) } else { with_alpha(pal.border, 140) })).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(icon).font(widgets::ui_font(18.0)).color(if primary { pal.accent } else { pal.subtext }));
+                                ui.add_space(4.0);
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(title).font(widgets::bold_font(13.5)).color(pal.bright));
+                                    ui.label(egui::RichText::new(sub).font(widgets::ui_font(11.5)).color(pal.subtext));
+                                });
+                            });
+                        });
+                        let resp = ui.interact(r.response.rect, ui.id().with(("git-switch", title)), egui::Sense::click());
+                        ui.add_space(6.0);
+                        resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+                    };
+                    if option(ui, ic::ARCHIVE, tr!("Parken und wechseln (empfohlen)" | "Park and switch (recommended)"), &trf!("Die Änderungen bleiben bei {} und kommen zurück, sobald du wieder dorthin wechselst." | "The changes stay with {} and come back as soon as you switch back.", self.git.branch), true) {
+                        choice = Some(true);
+                    }
+                    if option(ui, ic::ARROW_RIGHT, tr!("Mitnehmen" | "Take them along"), &trf!("Die Änderungen wandern mit nach {to} – klappt nur, wenn sie dort nicht kollidieren." | "The changes move to {to} – only works if they don't collide there."), false) {
+                        choice = Some(false);
+                    }
+                    if let Some(park) = choice {
+                        let target = target.clone();
+                        let ctx = ctx.clone();
+                        action = Some(Box::new(move |app: &mut App| app.git_switch(target, Some(park), &ctx, now)));
+                        close = true;
+                    }
+                    if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
+                        close = true;
+                    }
+                }
+                Dialog::GitDeleteBranch { name, merged } => {
+                    ui.label(egui::RichText::new(trf!("Branch {name} löschen?" | "Delete branch {name}?")).font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.add_space(6.0);
+                    if *merged {
+                        ui.label(egui::RichText::new(tr!("Alle Commits dieses Branches sind bereits im aktuellen Branch enthalten – es geht nichts verloren." | "All commits of this branch are already in the current branch – nothing is lost.")).color(pal.subtext));
+                    } else {
+                        ui.label(egui::RichText::new(trf!("{}  Dieser Branch enthält Commits, die noch nicht übernommen wurden. Sie gehen beim Löschen verloren (außer sie liegen auf einem Remote)." | "{}  This branch has commits that were not merged yet. They are lost when deleting (unless they are on a remote).", ic::WARN)).color(pal.yellow));
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, ic::TRASH, tr!("Löschen" | "Delete"), pal, BtnKind::Danger).clicked() {
+                            let name = name.clone();
+                            action = Some(Box::new(move |app: &mut App| {
+                                let root = app.project.root.clone();
+                                let r = crate::git::GitState::delete_branch(&root, &name);
+                                app.git_done(r, false, now);
+                            }));
+                            close = true;
+                        }
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
+                            close = true;
+                        }
+                    });
+                }
+                Dialog::GitDropStash { refname, title } => {
+                    ui.label(egui::RichText::new(tr!("Geparkte Änderungen löschen?" | "Delete parked changes?")).font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.add_space(6.0);
+                    ui.label(trf!("„{title}“ wird endgültig gelöscht." | "“{title}” will be deleted permanently."));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, ic::TRASH, tr!("Löschen" | "Delete"), pal, BtnKind::Danger).clicked() {
+                            let refname = refname.clone();
+                            action = Some(Box::new(move |app: &mut App| {
+                                let root = app.project.root.clone();
+                                if app.git.view == Some(crate::git::GitView::Stash(refname.clone())) {
+                                    app.git.view = None;
+                                }
+                                let r = crate::git::GitState::stash_drop(&root, &refname);
+                                app.git_done(r, false, now);
+                            }));
+                            close = true;
+                        }
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
+                            close = true;
+                        }
+                    });
+                }
+                Dialog::TexPackages { query } => {
+                    ui.set_width(600.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tr!("TeX-Pakete" | "TeX packages")).font(widgets::display_font(22.0)).color(pal.bright));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if widgets::icon_button_sized(ui, ic::TIMES, tr!("Schließen" | "Close"), pal, false, 28.0).clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+                    crate::texpkg::preload(ctx);
+                    match crate::texpkg::ready() {
+                        None => {
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                                widgets::draw_spinner(ui, r.center(), 7.0, pal.accent);
+                                ui.label(egui::RichText::new(tr!("Lade die TeX-Live-Paketdatenbank …" | "Loading the TeX Live package database …")).color(pal.subtext));
+                            });
+                        }
+                        Some(None) => {
+                            ui.label(egui::RichText::new(tr!("Keine TeX-Live-Paketdatenbank (texlive.tlpdb) gefunden. Pakete lassen sich dann über den Paketmanager des Systems oder tlmgr installieren." | "No TeX Live package database (texlive.tlpdb) found. Install packages with your system's package manager or tlmgr.")).color(pal.subtext));
+                        }
+                        Some(Some(db)) => {
+                            let pm = crate::deps::Pm::detect();
+                            let via = if pm.label().is_empty() { "tlmgr".to_string() } else { pm.label().to_string() };
+                            ui.label(egui::RichText::new(trf!("{} Pakete in TeX Live · installiert wird über {via}" | "{} packages in TeX Live · installed via {via}", db.packages.len())).font(widgets::ui_font(12.0)).color(pal.dim));
+                            ui.add_space(8.0);
+                            widgets::search_field(ui, query, tr!("Paket oder Datei, z. B. siunitx, minted.sty, tikz" | "Package or file, e.g. siunitx, minted.sty, tikz"), ic::SEARCH, pal, ui.available_width(), "texpkg-search").request_focus();
+                            ui.add_space(8.0);
+                            let q = query.trim();
+                            // a file name finds its package directly
+                            let mut hits: Vec<&crate::texpkg::TexPackage> = db.provider(q).into_iter().collect();
+                            for p in db.search(q, 60) {
+                                if !hits.iter().any(|h| h.name == p.name) {
+                                    hits.push(p);
+                                }
+                            }
+                            if q.is_empty() {
+                                ui.label(egui::RichText::new(tr!("Tippe einen Paketnamen, eine Datei (.sty, .cls …) oder ein Stichwort." | "Type a package name, a file (.sty, .cls …) or a keyword.")).color(pal.subtext));
+                            } else if hits.is_empty() {
+                                ui.label(egui::RichText::new(tr!("Nichts gefunden." | "Nothing found.")).color(pal.subtext));
+                            }
+                            let tab = if self.tab == Tab::Slides { Tab::Slides } else { Tab::Thesis };
+                            let installing = self.tex_install.is_some();
+                            // few hits: plain list; many: fixed-height scroll area (a shrinking one
+                            // inside the modal lags a frame behind and clips the last row)
+                            let many = hits.len() > 4;
+                            let list = |ui: &mut egui::Ui| {
+                                for p in hits {
+                                    let installed = db.is_installed(p);
+                                    let sys = crate::texpkg::system_packages(pm, p, None);
+                                    egui::Frame::new().fill(pal.base).corner_radius(8).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.set_width(ui.available_width() - 130.0);
+                                                ui.label(egui::RichText::new(&p.name).font(widgets::bold_font(13.5)).color(pal.bright));
+                                                if !p.shortdesc.is_empty() {
+                                                    ui.label(egui::RichText::new(&p.shortdesc).font(widgets::ui_font(12.0)).color(pal.subtext));
+                                                }
+                                                if !sys.is_empty() && sys != [p.name.clone()] {
+                                                    ui.label(egui::RichText::new(trf!("kommt mit {}" | "comes with {}", sys.join(", "))).font(widgets::mono_font(11.0)).color(pal.dim));
+                                                }
+                                            });
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                if installed {
+                                                    widgets::badge(ui, &trf!("{} installiert" | "{} installed", ic::CHECK), pal.green);
+                                                } else if sys.is_empty() {
+                                                    widgets::badge(ui, tr!("keine Zuordnung" | "no mapping"), pal.dim);
+                                                } else if !installing {
+                                                    let cmd = crate::texpkg::install_command(pm, &sys);
+                                                    if widgets::chip(ui, ic::DOWNLOAD, tr!("Installieren" | "Install"), true, pal.accent, pal).on_hover_text(&cmd).clicked() {
+                                                        let ctx = ctx.clone();
+                                                        action = Some(Box::new(move |app: &mut App| app.install_tex(tab, cmd, &ctx, now)));
+                                                        close = true;
+                                                    }
+                                                }
+                                            });
+                                        });
+                                    });
+                                    ui.add_space(4.0);
+                                }
+                            };
+                            if many {
+                                egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, false]).show(ui, list);
+                            } else {
+                                list(ui);
+                            }
+                        }
+                    }
+                }
+                Dialog::GitMergePr { number, title, squash, delete_branch } => {
+                    ui.label(egui::RichText::new(trf!("Pull Request #{number} zusammenführen?" | "Merge pull request #{number}?")).font(widgets::display_font(20.0)).color(pal.bright));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(title.as_str()).color(pal.subtext));
+                    ui.add_space(10.0);
+                    let mut kind = usize::from(*squash);
+                    if widgets::segmented(ui, "pr-merge-kind", &[(ic::MERGE, "Merge", None), (ic::COMMIT, "Squash", None)], &mut kind, pal) {
+                        *squash = kind == 1;
+                    }
+                    ui.label(
+                        egui::RichText::new(if *squash {
+                            tr!("Alle Commits werden zu einem einzigen zusammengefasst." | "All commits are combined into a single one.")
+                        } else {
+                            tr!("Die Commits bleiben einzeln im Verlauf erhalten." | "The commits stay in the history one by one.")
+                        })
+                        .font(widgets::ui_font(11.5))
+                        .color(pal.dim),
+                    );
+                    ui.add_space(6.0);
+                    ui.checkbox(delete_branch, tr!("Branch danach löschen" | "Delete branch afterwards"));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, ic::MERGE, tr!("Zusammenführen" | "Merge"), pal, BtnKind::Primary).clicked() {
+                            let (n, sq, del, ctx) = (*number, *squash, *delete_branch, ctx.clone());
+                            action = Some(Box::new(move |app: &mut App| {
+                                app.save_all();
+                                let root = app.project.root.clone();
+                                app.git.merge_pr(&root, n, sq, del, ctx);
+                            }));
+                            close = true;
+                        }
+                        if widgets::button(ui, "", tr!("Abbrechen" | "Cancel"), pal, BtnKind::Ghost).clicked() {
+                            close = true;
+                        }
+                    });
                 }
                 Dialog::Update => {
                     let up = &mut self.updater;
@@ -2712,9 +3115,33 @@ impl App {
                 let h = self.git.log[0].hash.clone();
                 self.git.open_commit(&root, &h);
             }
+            let tab = ["branches", "prs", "stash"].iter().position(|t| name.contains(t)).map_or(0, |i| i + 1);
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("git-tab"), tab));
+            if name.contains("switchdlg") && self.dialog.is_none() {
+                if let Some(b) = self.git.branches.iter().find(|b| !b.current && !b.remote) {
+                    self.dialog = Some(Dialog::GitSwitch { target: crate::git::SwitchTarget::Branch(b.clone()) });
+                }
+            }
+            if name.contains("stashview") && self.git.view.is_none() && !self.git.stashes.is_empty() {
+                let root = self.project.root.clone();
+                let r = self.git.stashes[0].refname.clone();
+                self.git.open_stash(&root, &r);
+            }
         }
         if name.contains("logs") {
             self.thesis.show_logs = true;
+        }
+        if name.contains("applyfix") && self.thesis.job.is_none() && self.thesis.fixes.first().is_some_and(|f| !matches!(f.action, crate::fixes::FixAction::Install { .. })) {
+            let f = self.thesis.fixes[0].clone();
+            self.apply_fix(Tab::Thesis, f, ctx, now);
+        }
+        if name.contains("winsetup") && self.winsetup.is_none() {
+            self.open_settings(Some(crate::settings_ui::Page::System), ctx);
+            self.winsetup = Some(crate::winsetup::demo(ctx));
+        }
+        if name.contains("texpkgs") && self.dialog.is_none() {
+            crate::texpkg::preload(ctx);
+            self.dialog = Some(Dialog::TexPackages { query: "minted".into() });
         }
         if name.contains("sel") && self.shelf_ui.selected.is_none() {
             self.shelf_ui.selected = self.shelf.papers.first().map(|p| p.entry.key.clone());

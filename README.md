@@ -43,6 +43,23 @@ springt danach automatisch an die Stelle, an der du gerade schreibst (SyncTeX).
 Doppelklick ins PDF führt zurück in den Quelltext, Fehler im Protokoll sind anklickbar
 und im Editor am Rand markiert.
 
+**Lösungsvorschläge bei Fehlern:** Haben viele Fehler dieselbe Ursache, zeigt das Protokoll
+oben einen nEdit-Vorschlag mit Erklärung und einem Knopf zum Beheben, z. B.:
+
+- fehlende TeX-Pakete (`File 'minted.sty' not found`, fehlende Schriften, Sprachen, `.bst`) –
+  nEdit sucht in der TeX-Live-Paketdatenbank das Paket, das die Datei enthält, und das passende
+  Paket deines Systems (Arch `texlive-latexextra`, Debian `texlive-latex-extra`,
+  Fedora/openSUSE `tex(minted.sty)`, sonst `tlmgr`/MiKTeX) und installiert es in einem Terminal;
+  danach wird automatisch neu kompiliert
+- Tippfehler im Paketnamen (`\usepackage{lisitngs}` → `listings`)
+- `Command \textquotedbl unavailable in encoding OT1` (z. B. durch listings mit `upquote=true`) –
+  nEdit ergänzt `\usepackage[T1]{fontenc}` direkt nach `\documentclass`, auch wenn die Klasse in
+  einer eingebundenen Vorlagendatei steht
+- fehlendes biber oder latexmk
+
+Über **TeX-Pakete** im Protokoll lassen sich alle Pakete von TeX Live durchsuchen (nach Name,
+Datei oder Stichwort) und fehlende per Klick installieren.
+
 - LaTeX-Syntaxhervorhebung, Zeilennummern, Suchen & Ersetzen, Fett/Kursiv/Kommentar per Tastenkürzel
 - Bausteine-Leiste: Abschnitt, Aufzählung, Abbildung, Tabelle, Gleichung, Fußnote, Zitat, Querverweis
 - Gliederung (Kapitel/Abschnitte über alle `\input`/`\include`-Dateien) und Wortzähler
@@ -182,6 +199,15 @@ kennt (z. B. TikZ-Diagramme), bleibt unverändert als LaTeX-Baustein.
   früheren Stand zurücksetzen
 - Änderungen verwerfen per Rechtsklick im Dateibaum (Datei oder Ordner) oder im Git-Panel –
   offene Editoren übernehmen den zurückgesetzten Stand sofort
+- **Branches**: anlegen (ungesicherte Änderungen kommen mit), per Klick wechseln, Remote-Branches
+  auschecken, in den aktuellen Branch übernehmen (Merge, mit Abbrechen bei Konflikten), löschen;
+  **Fetch** fragt das Remote ab, ohne Dateien anzufassen
+- **Wechseln mit offenen Änderungen**: nEdit fragt, ob sie mitkommen oder geparkt werden – geparkte
+  Änderungen kommen beim Zurückwechseln auf den Branch automatisch zurück
+- **Geparkt (Stash)**: Karten mit Branch, Alter, Dateien und Umfang (+/−), Zurückholen, Anwenden,
+  Ansehen als Diff, Löschen; im Verlauf zweigen geparkte Stände an ihrem Commit sichtbar ab
+- **Pull Requests** (GitHub, über die `gh`-CLI): offene PRs mit Review-Status und Umfang,
+  per Klick auschecken, für den eigenen Branch erstellen (auch als Entwurf) und zusammenführen
 
 <img src="docs/screenshots/diff.png" alt="Diff nebeneinander">
 
@@ -260,6 +286,15 @@ nEdit ist ein Editor – gesetzt wird mit einer normalen TeX-Distribution. Benö
 | **Deutsche Silbentrennung** | Kurzfassung auf Deutsch (optional, sonst nur Englisch) | `texlive-langgerman` | in `texlive-full` | in MacTeX enthalten | in TeX Live enthalten |
 | **Poppler** (`pdftoppm`, `pdfinfo`, `pdftotext`) | PDF-Vorschau, PDF-Import | `poppler` | `poppler-utils` | `brew install poppler` | `scoop install poppler` |
 | **git** *(optional)* | Versionen & Verlauf | `git` | `git` | `xcode-select --install` | [git-scm.com](https://git-scm.com) |
+| **gh** *(optional)* | Pull Requests auf GitHub (einmal `gh auth login`) | `github-cli` | `gh` | `brew install gh` | `winget install GitHub.cli` |
+
+**Windows ohne Vorarbeit:** Unter *Einstellungen → TeX & Werkzeuge → TeX für Windows einrichten*
+lädt nEdit alles Nötige selbst herunter (≈ 150 MB, ohne Administratorrechte, nach `%APPDATA%\nEdit`):
+[TinyTeX-1](https://github.com/rstudio/tinytex-releases) (pdflatex, latexmk, tlmgr und ein eigenes
+Perl), die Pakete der TU-Graz-Vorlagen samt biber und synctex sowie
+[Poppler](https://github.com/oschwartz10612/poppler-windows) für die PDF-Vorschau. nEdit nimmt diese
+Ordner beim Start in seinen eigenen Suchpfad auf; der System-PATH bleibt unverändert. Weitere Pakete
+installiert der Paketmanager im Protokoll über tlmgr.
 | **Rust** *(zum Bauen)* | — | `rust` | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) |
 
 Arch / Omarchy in einem Rutsch:
@@ -352,7 +387,8 @@ Bestehende Overleaf-Projekte funktionieren ebenfalls: Ordner in den Projektordne
 nEdit legt die `.nedit/`-Einstellungen beim ersten Öffnen an.
 
 Quellcode in [`src/`](src): `editor.rs` (Editor & Highlighting), `visual.rs` (visueller
-Modus), `pdfview.rs` (PDF-Vorschau), `compile.rs` (latexmk, Log, SyncTeX), `shelf.rs` /
+Modus), `pdfview.rs` (PDF-Vorschau), `compile.rs` (latexmk, Log, SyncTeX), `fixes.rs`
+(Lösungsvorschläge), `texpkg.rs` (TeX-Paketmanager), `winsetup.rs` (TeX für Windows), `shelf.rs` /
 `shelf_ui.rs` (Bibliothek), `git.rs`, `filetree.rs`, `workspace.rs` (Arbeitsbereiche),
 `theme.rs` (Themes), `quickopen.rs` (Schnellsuche), `vim.rs` (Vim-Modus), `help.rs` (Hilfe),
 `i18n.rs` (Deutsch/Englisch), `updater.rs` (Updates), `platform.rs` (Linux/macOS/Windows).

@@ -26,6 +26,8 @@ pub struct CompileResult {
     pub raw_log: String,
     pub duration: Duration,
     pub ok: bool,
+    /// suggestions for the errors (see fixes.rs)
+    pub fixes: Vec<crate::fixes::Fix>,
 }
 
 pub struct CompileJob {
@@ -111,12 +113,13 @@ fn run(spec: &CompileSpec) -> CompileResult {
     if issues.iter().all(|i| i.level != Level::Error) && !ok && log.is_empty() {
         issues.insert(0, Issue { level: Level::Error, file: None, line: None, message: tr!("Kompilieren fehlgeschlagen" | "Compilation failed").into(), context: raw_log.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n") });
     }
+    let fixes = if issues.iter().any(|i| i.level == Level::Error) || !ok { crate::fixes::suggest(&issues, &spec.root, &spec.main, &spec.engine, &raw_log) } else { vec![] };
     let pdf = spec.pdf_path();
     let pdf = pdf.exists().then_some(pdf);
     if !log.is_empty() {
         raw_log = log;
     }
-    CompileResult { ok: ok && pdf.is_some(), pdf, issues, raw_log, duration: t0.elapsed() }
+    CompileResult { ok: ok && pdf.is_some(), pdf, issues, raw_log, duration: t0.elapsed(), fixes }
 }
 
 fn tool_available(name: &str) -> bool {

@@ -159,8 +159,19 @@ pub fn restart() -> Result<(), String> {
     cmd.spawn().map(|_| ()).map_err(|e| trf!("Neustart fehlgeschlagen ({}): {e}" | "Restart failed ({}): {e}", exe.display()))
 }
 
+/// GET a small text resource (GitHub API).
+pub(crate) fn get_text(url: &str) -> Result<String, String> {
+    let mut resp = agent()
+        .get(url)
+        .header("User-Agent", "nEdit")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| trf!("Nicht erreichbar: {e}" | "Unreachable: {e}"))?;
+    resp.body_mut().read_to_string().map_err(|e| e.to_string())
+}
+
 /// Download a release asset; `progress(done, total)` is called while reading.
-fn download(url: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
+pub(crate) fn download(url: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
     let mut resp = agent().get(url).header("User-Agent", "nEdit-updater").call().map_err(|e| trf!("Download fehlgeschlagen: {e}" | "Download failed: {e}"))?;
     let total: u64 = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
     let mut reader = resp.body_mut().with_config().limit(500 * 1024 * 1024).reader();
