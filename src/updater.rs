@@ -426,6 +426,39 @@ mod tests {
         }
     }
 
+    /// Swapping a whole app bundle: the new one is in place, nothing is left behind.
+    #[test]
+    #[cfg(unix)]
+    fn bundle_is_swapped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("nedit-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bundle = dir.join("Applications/nEdit.app");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        std::fs::write(bundle.join("Contents/MacOS/nedit"), b"old").unwrap();
+        std::fs::write(bundle.join("Contents/stale.txt"), b"from the old version").unwrap();
+        let mut buf = std::io::Cursor::new(vec![]);
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            let exe = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
+            w.start_file("nEdit.app/Contents/MacOS/nedit", exe).unwrap();
+            std::io::Write::write_all(&mut w, b"new").unwrap();
+            w.finish().unwrap();
+        }
+        replace_bundle(&bundle, buf.get_ref()).unwrap();
+        assert_eq!(std::fs::read(bundle.join("Contents/MacOS/nedit")).unwrap(), b"new");
+        assert!(!bundle.join("Contents/stale.txt").exists(), "old files are gone");
+        assert_eq!(std::fs::metadata(bundle.join("Contents/MacOS/nedit")).unwrap().permissions().mode() & 0o111, 0o111);
+        let left: Vec<_> = std::fs::read_dir(dir.join("Applications")).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("nEdit.app")], "no staging or old copies");
+        // a zip without an app leaves the installed one untouched
+        let mut empty = std::io::Cursor::new(vec![]);
+        zip::ZipWriter::new(&mut empty).finish().unwrap();
+        assert!(replace_bundle(&bundle, empty.get_ref()).is_err());
+        assert_eq!(std::fs::read(bundle.join("Contents/MacOS/nedit")).unwrap(), b"new");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The bundle swap keeps the executable bit and drops __MACOSX junk.
     #[test]
     #[cfg(unix)]

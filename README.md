@@ -308,6 +308,10 @@ Die PDF-Vorschau übernimmt macOS selbst (CoreGraphics/PDFKit), Poppler ist nich
 gelten mit ⌘ statt Strg und werden auch so angezeigt; Tabs wechseln mit ⌘1/2/3, Vollbild mit ⌃⌘F.
 Updates tauschen die ganze App aus.
 
+*Ohne Rückfrage beim ersten Start:* Sind im Repository die Secrets `MACOS_CERT_P12` (Developer-ID-
+Zertifikat als Base64), `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID` und
+`APPLE_APP_PASSWORD` hinterlegt, signiert und notarisiert der Release-Workflow die App automatisch.
+
 **Windows ohne Vorarbeit:** Unter *Einstellungen → TeX & Werkzeuge → TeX für Windows einrichten*
 lädt nEdit alles Nötige selbst herunter (≈ 150 MB, ohne Administratorrechte, nach `%APPDATA%\nEdit`):
 [TinyTeX-1](https://github.com/rstudio/tinytex-releases) (pdflatex, latexmk, tlmgr und ein eigenes
