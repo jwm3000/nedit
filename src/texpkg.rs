@@ -288,7 +288,7 @@ pub fn install_command(pm: Pm, pkgs: &[String]) -> String {
     match pm {
         Pm::Brew | Pm::MacNoBrew => tlmgr_command(pkgs),
         Pm::Unknown if has_tool("tlmgr") => format!("tlmgr install {}", quoted.join(" ")),
-        Pm::WinTexlive => format!("tlmgr install {}", quoted.join(" ")),
+        Pm::WinTexlive => tlmgr_command(pkgs),
         Pm::Winget => format!("miktex packages install {}", quoted.join(" ")),
         _ => {
             let refs: Vec<&str> = quoted.iter().map(String::as_str).collect();
@@ -309,14 +309,17 @@ pub fn tlmgr_command(pkgs: &[String]) -> String {
         let s = p.display().to_string();
         if s.contains(' ') { format!("\"{s}\"") } else { s }
     };
+    // tlmgr refuses to install while it is older than the package repository – update it first
+    let t = quoted(&tlmgr);
     if cfg!(windows) {
-        return format!("{} install {list}", quoted(&tlmgr));
+        return format!("{t} update --self && {t} install {list}");
     }
     // writable TEXMFROOT (…/TinyTeX/bin/<arch>/tlmgr → …/TinyTeX)?
     let root = tlmgr.canonicalize().unwrap_or(tlmgr.clone());
     let root = root.ancestors().nth(3).map(Path::to_path_buf);
     let own = root.is_some_and(|r| r.join("tlpkg").is_dir() && writable(&r.join("tlpkg")));
-    format!("{}{} install {list}", if own { "" } else { "sudo " }, quoted(&tlmgr))
+    let sudo = if own { "" } else { "sudo " };
+    format!("{sudo}{t} update --self && {sudo}{t} install {list}")
 }
 
 #[cfg(unix)]

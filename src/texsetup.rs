@@ -237,9 +237,13 @@ fn run(base: &Path, send: &dyn Fn(Progress)) -> Result<(), String> {
             return Err(tr!("TinyTeX konnte nicht entpackt werden" | "TinyTeX could not be unpacked").into());
         }
     }
-    // 2. packages for the templates (+ biber, synctex)
-    send(Progress::Step(trf!("{} TeX-Pakete installieren" | "Installing {} TeX packages", TEMPLATE_PACKAGES.len())));
+    // 2. packages for the templates (+ biber, synctex). The daily TinyTeX bundle can be a
+    // little older than its package repository, and then tlmgr refuses everything until it
+    // has updated itself.
     let tlmgr = own_tlmgr().ok_or(tr!("tlmgr fehlt in TinyTeX" | "tlmgr is missing in TinyTeX"))?;
+    send(Progress::Step(tr!("tlmgr aktualisieren" | "Updating tlmgr").into()));
+    tlmgr_run(&tlmgr, &["update", "--self"], send)?;
+    send(Progress::Step(trf!("{} TeX-Pakete installieren" | "Installing {} TeX packages", TEMPLATE_PACKAGES.len())));
     tlmgr_install(&tlmgr, TEMPLATE_PACKAGES, send)?;
     // 3. Windows: Poppler for the PDF preview (macOS renders PDFs itself)
     if cfg!(windows) && poppler_bin(base).is_none() {
@@ -280,6 +284,13 @@ fn unpack_tinytex(base: &Path, bytes: &[u8]) -> Result<(), String> {
 
 /// Install packages with tlmgr; its output is passed on line by line.
 pub fn tlmgr_install(tlmgr: &Path, packages: &[&str], send: &dyn Fn(Progress)) -> Result<(), String> {
+    let mut args = vec!["install"];
+    args.extend_from_slice(packages);
+    tlmgr_run(tlmgr, &args, send)
+}
+
+/// Run tlmgr with `args`; its output is passed on line by line, its exit code decides.
+pub fn tlmgr_run(tlmgr: &Path, args: &[&str], send: &dyn Fn(Progress)) -> Result<(), String> {
     use std::io::BufRead;
     let mut cmd = if cfg!(windows) {
         let mut c = crate::platform::cmd("cmd");
@@ -289,8 +300,7 @@ pub fn tlmgr_install(tlmgr: &Path, packages: &[&str], send: &dyn Fn(Progress)) -
         crate::platform::cmd(tlmgr)
     };
     let mut child = cmd
-        .arg("install")
-        .args(packages)
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
