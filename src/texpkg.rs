@@ -314,10 +314,10 @@ pub fn tlmgr_command(pkgs: &[String]) -> String {
     if cfg!(windows) {
         return format!("{t} update --self && {t} install {list}");
     }
-    // writable TEXMFROOT (…/TinyTeX/bin/<arch>/tlmgr → …/TinyTeX)?
-    let root = tlmgr.canonicalize().unwrap_or(tlmgr.clone());
-    let root = root.ancestors().nth(3).map(Path::to_path_buf);
-    let own = root.is_some_and(|r| r.join("tlpkg").is_dir() && writable(&r.join("tlpkg")));
+    // writable TEXMFROOT (…/TinyTeX/bin/<arch>/tlmgr → …/TinyTeX)? Not resolved: in bin/ tlmgr
+    // is a symlink into texmf-dist/scripts.
+    let own = crate::texsetup::own_tlmgr().is_some_and(|o| o == tlmgr)
+        || tlmgr.ancestors().nth(3).is_some_and(|r| r.join("tlpkg").is_dir() && writable(&r.join("tlpkg")));
     let sudo = if own { "" } else { "sudo " };
     format!("{sudo}{t} update --self && {sudo}{t} install {list}")
 }

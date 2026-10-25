@@ -64,7 +64,7 @@ jobs:
         run: |
           mkdir -p p2
           env -i HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-            NEDIT_PROJECTS="$PWD/p2" NEDIT_SHOT="$PWD/shots/2:thesis@100,slides@104,thesis-visual@108,thesis-quick@111,thesis-settings-set-sys@115" \
+            NEDIT_PROJECTS="$PWD/p2" NEDIT_SHOT="$PWD/shots/2:thesis@100,slides@104,thesis-visual@108,thesis-help@111,thesis-help-settings-set-sys@115" \
             dist/nEdit.app/Contents/MacOS/nedit & pid=$!
           for i in $(seq 1 180); do kill -0 $pid 2>/dev/null || break; sleep 1; done
           kill $pid 2>/dev/null || true

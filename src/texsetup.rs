@@ -25,6 +25,8 @@ pub const TEMPLATE_PACKAGES: &[&str] = &[
     "fontawesome5", "fontname", "footmisc", "fpl", "koma-script", "lipsum", "listings", "listingsutf8", "logreq", "mathpazo", "microtype", "mptopdf",
     "oberdiek", "ocg-p", "palatino", "pdfcol", "pgf", "placeins", "sansmathaccent", "soul", "tcolorbox", "tikzfill", "translator", "trimspaces", "ulem",
     "units", "xpatch", "xurl", "biber", "synctex",
+    // charts are common in theses (and listed in nEdit's system check)
+    "pgfplots",
 ];
 
 /// Is there a setup assistant for this system?

@@ -425,7 +425,12 @@ impl App {
     }
 
     pub fn apply_style(&mut self, ctx: &egui::Context) {
-        ctx.set_visuals(self.pal.visuals());
+        // nEdit has its own themes: the same visuals whatever the system's light/dark mode
+        // is (egui would otherwise switch to its default look when macOS or Windows is light,
+        // or when the system switches at sunset)
+        let v = self.pal.visuals();
+        ctx.set_visuals_of(egui::Theme::Dark, v.clone());
+        ctx.set_visuals_of(egui::Theme::Light, v);
         ctx.all_styles_mut(|s| {
             s.spacing.item_spacing = vec2(8.0, 6.0);
             s.spacing.button_padding = vec2(10.0, 5.0);
@@ -527,7 +532,7 @@ impl App {
     }
 
     /// Textures for the `\includegraphics` of a file (visual mode); loads PNG/JPG directly and
-    /// the first page of PDF figures via pdftoppm. Searched in the project, next to the file
+    /// the first page of PDF figures (see pdftools). Searched in the project, next to the file
     /// and in the `\graphicspath` of the main document.
     pub fn figure_textures(&mut self, ctx: &egui::Context, rel: &str) -> HashMap<String, (egui::TextureId, egui::Vec2)> {
         let Some(bi) = self.buffer_idx(rel) else { return HashMap::new() };
@@ -2253,7 +2258,13 @@ impl App {
                             }
                             if t == Tab::Slides {
                                 ui.add_space(4.0);
-                                if widgets::button(ui, ic::PLAY, tr!("Präsentieren" | "Present"), pal, BtnKind::Secondary).on_hover_text("F5").clicked() {
+                                // narrow window: only the icon, so it does not run into the tabs
+                                let present = if ui.available_width() < 150.0 {
+                                    widgets::icon_button(ui, ic::TV, tr!("Präsentieren (F5)" | "Present (F5)"), pal, false).clicked()
+                                } else {
+                                    widgets::button(ui, ic::PLAY, tr!("Präsentieren" | "Present"), pal, BtnKind::Secondary).on_hover_text("F5").clicked()
+                                };
+                                if present {
                                     crate::workspace::start_presentation(self, &ctx, now);
                                 }
                             }
