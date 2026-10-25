@@ -55,7 +55,10 @@ jobs:
         run: env -i HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin dist/nEdit.app/Contents/MacOS/nedit --setup-tex
 
       - name: Vorlagen mit diesem TeX kompilieren
-        run: PATH="$HOME/Library/TinyTeX/bin/universal-darwin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.cargo/bin" cargo test --release -- --ignored --test-threads=1 template_compiles blank_template_compiles
+        run: |
+          # only nEdit's TinyTeX and the system – nothing from Homebrew
+          CARGO_BIN=$(dirname "$(command -v cargo)")
+          PATH="$HOME/Library/TinyTeX/bin/universal-darwin:/usr/bin:/bin:/usr/sbin:/sbin:$CARGO_BIN" cargo test --release -- --ignored --test-threads=1 template_compiles blank_template_compiles
 
       - name: Screenshots – mit TeX (nEdit kompiliert beim Öffnen selbst)
         run: |
