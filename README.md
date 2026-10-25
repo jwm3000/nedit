@@ -281,12 +281,32 @@ nEdit ist ein Editor – gesetzt wird mit einer normalen TeX-Distribution. Benö
 
 | Werkzeug | Wofür | Linux (Arch) | Debian/Ubuntu | macOS (Homebrew) | Windows |
 | --- | --- | --- | --- | --- | --- |
-| **TeX Live** inkl. `latexmk`, `synctex`, `bibtex` | Kompilieren, PDF↔Quelle | `texlive-basic texlive-latexextra texlive-fontsextra texlive-binextra` | `texlive-full` | `brew install --cask mactex` | [TeX Live](https://tug.org/texlive/) oder MiKTeX (+ Perl für latexmk) |
-| **biber** | Literaturverzeichnis der Vorlage (biblatex) – **erforderlich** | `biber` | `biber` | in MacTeX enthalten | in TeX Live enthalten |
-| **Deutsche Silbentrennung** | Kurzfassung auf Deutsch (optional, sonst nur Englisch) | `texlive-langgerman` | in `texlive-full` | in MacTeX enthalten | in TeX Live enthalten |
-| **Poppler** (`pdftoppm`, `pdfinfo`, `pdftotext`) | PDF-Vorschau, PDF-Import | `poppler` | `poppler-utils` | `brew install poppler` | `scoop install poppler` |
+| **TeX Live** inkl. `latexmk`, `synctex`, `bibtex` | Kompilieren, PDF↔Quelle | `texlive-basic texlive-latexextra texlive-fontsextra texlive-binextra` | `texlive-full` | richtet nEdit selbst ein (oder MacTeX) | richtet nEdit selbst ein (oder TeX Live / MiKTeX) |
+| **biber** | Literaturverzeichnis der Vorlage (biblatex) – **erforderlich** | `biber` | `biber` | dabei | dabei |
+| **Deutsche Silbentrennung** | Kurzfassung auf Deutsch (optional, sonst nur Englisch) | `texlive-langgerman` | in `texlive-full` | dabei | dabei |
+| **Poppler** (`pdftoppm`, `pdfinfo`, `pdftotext`) | PDF-Vorschau, PDF-Import | `poppler` | `poppler-utils` | nicht nötig – macOS rendert selbst | richtet nEdit selbst ein |
 | **git** *(optional)* | Versionen & Verlauf | `git` | `git` | `xcode-select --install` | [git-scm.com](https://git-scm.com) |
 | **gh** *(optional)* | Pull Requests auf GitHub (einmal `gh auth login`) | `github-cli` | `gh` | `brew install gh` | `winget install GitHub.cli` |
+| **Rust** *(nur zum Bauen)* | — | `rust` | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) |
+
+**macOS – herunterladen und loslegen:**
+
+1. **`nEdit-macOS.dmg`** von den [Releases](https://github.com/jwm3000/nedit/releases/latest) laden,
+   öffnen und nEdit in den Ordner *Programme* ziehen. Eine App für Apple Silicon und Intel, ab macOS 11.
+2. **Erster Start:** nEdit ist nicht bei Apple notarisiert (dafür braucht es ein kostenpflichtiges
+   Entwicklerkonto). macOS fragt deshalb einmal nach: nEdit öffnen, die Meldung schließen, dann
+   *Systemeinstellungen → Datenschutz & Sicherheit → „Dennoch öffnen“*. Alternativ im Terminal:
+   `xattr -dr com.apple.quarantine /Applications/nEdit.app`
+3. **TeX:** *Einstellungen → TeX & Werkzeuge → TeX für macOS einrichten* lädt
+   [TinyTeX-1](https://github.com/rstudio/tinytex-releases) samt allen Paketen der TU-Graz-Vorlagen,
+   biber und synctex (≈ 100 MB, ohne Administratorrechte, nach `~/Library/TinyTeX` – dort, wo auch
+   TinyTeXs eigener Installer es ablegt). Fehlt TeX beim Kompilieren, bietet nEdit das direkt an;
+   im Terminal geht es mit `/Applications/nEdit.app/Contents/MacOS/nedit --setup-tex`. Ein
+   vorhandenes MacTeX, BasicTeX oder Homebrew-TeX wird erkannt – auch beim Start aus dem Finder.
+
+Die PDF-Vorschau übernimmt macOS selbst (CoreGraphics/PDFKit), Poppler ist nicht nötig. Tastenkürzel
+gelten mit ⌘ statt Strg und werden auch so angezeigt; Tabs wechseln mit ⌘1/2/3, Vollbild mit ⌃⌘F.
+Updates tauschen die ganze App aus.
 
 **Windows ohne Vorarbeit:** Unter *Einstellungen → TeX & Werkzeuge → TeX für Windows einrichten*
 lädt nEdit alles Nötige selbst herunter (≈ 150 MB, ohne Administratorrechte, nach `%APPDATA%\nEdit`):
@@ -295,7 +315,6 @@ Perl), die Pakete der TU-Graz-Vorlagen samt biber und synctex sowie
 [Poppler](https://github.com/oschwartz10612/poppler-windows) für die PDF-Vorschau. nEdit nimmt diese
 Ordner beim Start in seinen eigenen Suchpfad auf; der System-PATH bleibt unverändert. Weitere Pakete
 installiert der Paketmanager im Protokoll über tlmgr.
-| **Rust** *(zum Bauen)* | — | `rust` | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) | [rustup](https://rustup.rs) |
 
 Arch / Omarchy in einem Rutsch:
 
@@ -310,6 +329,7 @@ sudo pacman -S --needed rust texlive-basic texlive-latexextra texlive-fontsextra
 git clone https://github.com/jwm3000/nedit.git
 cd nedit
 ./install.sh          # Linux: baut Release, installiert nach ~/.local/bin + App-Launcher-Eintrag
+packaging/macos/build-app.sh   # macOS: baut dist/nEdit.app (Universal) und die DMG
 # oder
 cargo run --release
 ```

@@ -26,6 +26,10 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 trash = "5.2.9"
 cpal = "0.18.2"
 
+# macOS: PDFKit (text of PDFs) is an Objective-C API
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
