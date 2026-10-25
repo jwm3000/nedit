@@ -286,7 +286,7 @@ fn debian_name(coll: &str) -> String {
 pub fn install_command(pm: Pm, pkgs: &[String]) -> String {
     let quoted: Vec<String> = pkgs.iter().map(|p| if p.contains('(') { format!("'{p}'") } else { p.clone() }).collect();
     match pm {
-        Pm::Brew | Pm::MacNoBrew => format!("sudo tlmgr install {}", quoted.join(" ")),
+        Pm::Brew | Pm::MacNoBrew => tlmgr_command(pkgs),
         Pm::Unknown if has_tool("tlmgr") => format!("tlmgr install {}", quoted.join(" ")),
         Pm::WinTexlive => format!("tlmgr install {}", quoted.join(" ")),
         Pm::Winget => format!("miktex packages install {}", quoted.join(" ")),
@@ -295,6 +295,41 @@ pub fn install_command(pm: Pm, pkgs: &[String]) -> String {
             pm.install_cmd(&refs)
         }
     }
+}
+
+/// `tlmgr install …` for this system. The TinyTeX nEdit set up (or any TeX Live in the
+/// user's own folders) needs no sudo; a system-wide TeX Live (MacTeX, BasicTeX) does. The
+/// full path is used because the terminal window does not know nEdit's PATH.
+pub fn tlmgr_command(pkgs: &[String]) -> String {
+    let list = pkgs.join(" ");
+    let Some(tlmgr) = crate::texsetup::own_tlmgr().or_else(|| crate::platform::which("tlmgr")) else {
+        return format!("tlmgr install {list}");
+    };
+    let quoted = |p: &Path| {
+        let s = p.display().to_string();
+        if s.contains(' ') { format!("\"{s}\"") } else { s }
+    };
+    if cfg!(windows) {
+        return format!("{} install {list}", quoted(&tlmgr));
+    }
+    // writable TEXMFROOT (…/TinyTeX/bin/<arch>/tlmgr → …/TinyTeX)?
+    let root = tlmgr.canonicalize().unwrap_or(tlmgr.clone());
+    let root = root.ancestors().nth(3).map(Path::to_path_buf);
+    let own = root.is_some_and(|r| r.join("tlpkg").is_dir() && writable(&r.join("tlpkg")));
+    format!("{}{} install {list}", if own { "" } else { "sudo " }, quoted(&tlmgr))
+}
+
+#[cfg(unix)]
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".nedit-write-{}", std::process::id()));
+    let ok = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+#[cfg(not(unix))]
+fn writable(_: &Path) -> bool {
+    true
 }
 
 /// Run the install in a terminal window, where the password prompt and progress are

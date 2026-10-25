@@ -19,7 +19,7 @@ pub fn set_english(on: bool) {
 #[macro_export]
 macro_rules! tr {
     ($de:literal | $en:literal) => {
-        if $crate::i18n::en() { $en } else { $de }
+        $crate::i18n::keys(if $crate::i18n::en() { $en } else { $de })
     };
 }
 
@@ -27,12 +27,78 @@ macro_rules! tr {
 #[macro_export]
 macro_rules! trf {
     ($de:literal | $en:literal $(, $($arg:tt)*)?) => {
-        if $crate::i18n::en() { format!($en $(, $($arg)*)?) } else { format!($de $(, $($arg)*)?) }
+        $crate::i18n::keys_owned(if $crate::i18n::en() { format!($en $(, $($arg)*)?) } else { format!($de $(, $($arg)*)?) })
     };
+}
+
+/// Shortcuts as the Mac writes them: "Strg+Umschalt+Z" → "⌘⇧Z", "Alt+↑" → "⌥↑". The
+/// shortcuts themselves use egui's `command` modifier, which is ⌘ on macOS.
+pub fn mac_keys(s: &str) -> String {
+    let mut out = s.to_string();
+    for (from, to) in [
+        ("Strg+Umschalt+", "⌘⇧"),
+        ("Ctrl+Shift+", "⌘⇧"),
+        ("Strg+Alt+", "⌘⌥"),
+        ("Ctrl+Alt+", "⌘⌥"),
+        ("Strg + ", "⌘+ "),
+        ("Ctrl + ", "⌘+ "),
+        ("Strg −", "⌘−"),
+        ("Ctrl −", "⌘−"),
+        ("Strg+", "⌘"),
+        ("Ctrl+", "⌘"),
+        ("Umschalt+", "⇧"),
+        ("Shift+", "⇧"),
+        ("Alt+", "⌥"),
+        ("F11", "⌃⌘F"),
+    ] {
+        out = out.replace(from, to);
+    }
+    out
+}
+
+fn has_keys(s: &str) -> bool {
+    s.contains("Strg") || s.contains("Ctrl") || s.contains("Alt+") || s.contains("Shift+") || s.contains("Umschalt+") || s.contains("F11")
+}
+
+/// `tr!` result for this system (macOS: ⌘ instead of Strg). Interned, so it stays `'static`.
+#[inline]
+pub fn keys(s: &'static str) -> &'static str {
+    if !cfg!(target_os = "macos") || !has_keys(s) {
+        return s;
+    }
+    intern(s)
+}
+
+#[inline]
+pub fn keys_owned(s: String) -> String {
+    if !cfg!(target_os = "macos") || !has_keys(&s) {
+        return s;
+    }
+    mac_keys(&s)
+}
+
+/// One leaked copy per distinct text (texts with shortcuts are a small, fixed set).
+fn intern(s: &str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static MAP: Mutex<Option<HashMap<String, &'static str>>> = Mutex::new(None);
+    let mut m = MAP.lock().unwrap();
+    let m = m.get_or_insert_with(HashMap::new);
+    if let Some(v) = m.get(s) {
+        return v;
+    }
+    let v: &'static str = Box::leak(mac_keys(s).into_boxed_str());
+    m.insert(s.to_string(), v);
+    v
 }
 
 /// Runtime translation for texts stored in tables (consts) or passed around dynamically.
 pub fn t(s: &str) -> &str {
+    let r = translate(s);
+    if cfg!(target_os = "macos") && has_keys(r) { intern(r) } else { r }
+}
+
+fn translate(s: &str) -> &str {
     if !en() {
         return s;
     }
@@ -263,5 +329,18 @@ pub fn t(s: &str) -> &str {
         "Ungültig: :s/alt/neu/[g]" => "Invalid: :s/old/new/[g]",
         "Noch kein PDF – Strg+Enter zum Kompilieren" => "No PDF yet – Ctrl+Enter to compile",
         _ => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mac_shortcuts() {
+        assert_eq!(super::mac_keys("Fett (Strg+B)"), "Fett (⌘B)");
+        assert_eq!(super::mac_keys("Redo (Ctrl+Shift+Z)"), "Redo (⌘⇧Z)");
+        assert_eq!(super::mac_keys("Dokument (Strg+Umschalt+D)"), "Dokument (⌘⇧D)");
+        assert_eq!(super::mac_keys("Alt+↑↓ verschieben · Strg+C/V kopieren"), "⌥↑↓ verschieben · ⌘C/V kopieren");
+        assert_eq!(super::mac_keys("Auch mit Strg + / Strg − änderbar"), "Auch mit ⌘+ / ⌘− änderbar");
+        assert_eq!(super::mac_keys("Keine Kürzel hier"), "Keine Kürzel hier");
     }
 }

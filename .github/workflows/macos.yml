@@ -1,0 +1,81 @@
+name: macOS
+
+# Checks nEdit on a fresh Mac the way a user meets it: the app bundle started with the
+# Finder's minimal PATH, first without TeX, then after "TeX einrichten" (nedit --setup-tex),
+# with screenshots of both. Runs on demand and for branches named macos*.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["macos*"]
+
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Ausgangslage
+        run: |
+          sw_vers; uname -m
+          for t in pdflatex latexmk tlmgr pdftoppm brew git perl; do printf '%-10s %s\n' "$t" "$(command -v $t || echo –)"; done
+          xcode-select -p || true
+
+      - name: Tests (PDF nativ über CoreGraphics/PDFKit, Updater, TinyTeX-Archiv)
+        env:
+          NEDIT_NET_TESTS: "1"
+        run: cargo test --release
+
+      - name: nEdit.app bauen
+        run: packaging/macos/build-app.sh dist
+
+      - name: App-Bundle prüfen
+        run: |
+          plutil -p dist/nEdit.app/Contents/Info.plist
+          codesign -dv --verbose=2 dist/nEdit.app 2>&1
+          lipo -info dist/nEdit.app/Contents/MacOS/nedit
+          hdiutil imageinfo dist/nEdit-macOS.dmg | head -5
+
+      - name: Screenshots – frischer Mac ohne TeX
+        run: |
+          mkdir -p shots p1
+          # like a start from the Finder: minimal PATH, nothing from the shell
+          env -i HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            NEDIT_PROJECTS="$PWD/p1" NEDIT_SHOT="$PWD/shots/1:thesis@12,thesis-settings-set-sys@16,thesis-help@19,thesis-quick@22" \
+            dist/nEdit.app/Contents/MacOS/nedit & pid=$!
+          for i in $(seq 1 90); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          kill $pid 2>/dev/null || true
+          ls -la shots
+
+      - name: TeX einrichten wie ein Nutzer (nedit --setup-tex)
+        run: env -i HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin dist/nEdit.app/Contents/MacOS/nedit --setup-tex
+
+      - name: Vorlagen mit diesem TeX kompilieren
+        run: PATH="$HOME/Library/TinyTeX/bin/universal-darwin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.cargo/bin" cargo test --release -- --ignored --test-threads=1 template_compiles blank_template_compiles
+
+      - name: Screenshots – mit TeX (nEdit kompiliert beim Öffnen selbst)
+        run: |
+          mkdir -p p2
+          env -i HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            NEDIT_PROJECTS="$PWD/p2" NEDIT_SHOT="$PWD/shots/2:thesis@100,slides@104,thesis-settings-set-sys@108,thesis-visual@112" \
+            dist/nEdit.app/Contents/MacOS/nedit & pid=$!
+          for i in $(seq 1 180); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          kill $pid 2>/dev/null || true
+          ls -la shots p2/*/.nedit/build/*/ || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-screenshots
+          path: shots/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nEdit-macOS
+          path: |
+            dist/nEdit-macOS.dmg
+            dist/nEdit-macOS.zip

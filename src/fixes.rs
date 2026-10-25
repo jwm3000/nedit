@@ -15,6 +15,8 @@ pub enum FixAction {
     Replace { file: String, line: usize, from: String, to: String },
     /// Run an install command in a terminal (password prompt, progress).
     Install { command: String },
+    /// No TeX at all: start nEdit's own TeX setup (Windows, macOS).
+    SetupTex,
     /// Only an explanation.
     None,
 }
@@ -85,7 +87,19 @@ pub fn suggest(issues: &[Issue], root: &Path, main: &str, engine: &str, latexmk_
         fixes.push(tool_fix(Key::Biber, "biber", tr!("Das Dokument nutzt biblatex mit backend=biber – ohne biber fehlt das Literaturverzeichnis." | "The document uses biblatex with backend=biber – without biber the bibliography is missing.")));
     }
     if !crate::platform::has_tool("latexmk") && (latexmk_out.contains("latexmk konnte nicht gestartet werden") || latexmk_out.contains("Could not start latexmk")) {
-        fixes.push(tool_fix(Key::Latexmk, "latexmk", tr!("nEdit kompiliert mit latexmk – es ist nicht installiert." | "nEdit compiles with latexmk – it is not installed.")));
+        if crate::texsetup::SUPPORTED && !crate::platform::has_tool("pdflatex") {
+            fixes.push(Fix {
+                title: tr!("TeX einrichten" | "Set up TeX").into(),
+                detail: tr!(
+                    "Auf diesem Rechner ist noch kein TeX installiert. nEdit lädt TinyTeX und die Pakete der Vorlagen direkt herunter – ohne Administratorrechte, etwa 100 MB." | "There is no TeX on this computer yet. nEdit downloads TinyTeX and the packages of the templates right here – no admin rights, about 100 MB."
+                )
+                .into(),
+                covers: 1,
+                action: FixAction::SetupTex,
+            });
+        } else {
+            fixes.push(tool_fix(Key::Latexmk, "latexmk", tr!("nEdit kompiliert mit latexmk – es ist nicht installiert." | "nEdit compiles with latexmk – it is not installed.")));
+        }
     }
     fixes.sort_by(|a, b| b.covers.cmp(&a.covers));
     fixes
@@ -283,7 +297,7 @@ pub fn apply(root: &Path, action: &FixAction) -> Result<String, String> {
             std::fs::write(&path, lines.join("\n")).map_err(|e| e.to_string())?;
             Ok(file.clone())
         }
-        FixAction::Install { .. } | FixAction::None => Err("not a file fix".into()),
+        FixAction::Install { .. } | FixAction::SetupTex | FixAction::None => Err("not a file fix".into()),
     }
 }
 

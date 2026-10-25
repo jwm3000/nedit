@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>nEdit</string>
+	<key>CFBundleDisplayName</key>
+	<string>nEdit</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.jwm3000.nedit</string>
+	<key>CFBundleExecutable</key>
+	<string>nedit</string>
+	<key>CFBundleIconFile</key>
+	<string>nedit</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>de</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>de</string>
+		<string>en</string>
+	</array>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSRequiresAquaSystemAppearance</key>
+	<false/>
+	<key>NSHumanReadableCopyright</key>
+	<string>nEdit – LaTeX Studio · MIT License</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>nEdit öffnet ein Terminal-Fenster, um fehlende TeX-Pakete zu installieren.</string>
+</dict>
+</plist>

@@ -603,9 +603,11 @@ impl App {
             self.recheck_deps(ctx);
             return;
         }
-        // Windows: everything needed to compile, downloaded right here
-        if cfg!(windows) || self.winsetup.is_some() {
-            self.windows_setup_card(ui, pal);
+        // Windows, macOS: everything needed to compile, downloaded right here. On macOS only
+        // when something is missing – a complete MacTeX needs nothing.
+        let tex_missing = rep.items.iter().any(|c| c.required && !c.ok && !matches!(c.key, crate::deps::Key::Git | crate::deps::Key::Poppler));
+        if self.texsetup.is_some() || cfg!(windows) || (cfg!(target_os = "macos") && (tex_missing || crate::texsetup::tinytex_installed(&crate::texsetup::base_dir()))) {
+            self.tex_setup_card(ui, pal);
         }
         for (title, required) in [(tr!("Benötigt" | "Required"), true), (tr!("Optional" | "Optional"), false)] {
             heading(ui, pal, title);
@@ -1086,12 +1088,13 @@ impl App {
 
 /// A copyable command in a mono box.
 impl App {
-    /// "Set up TeX for Windows": TinyTeX + template packages + Poppler, without admin rights.
-    fn windows_setup_card(&mut self, ui: &mut Ui, pal: &Palette) {
-        use crate::winsetup::{self, Progress};
-        let base = winsetup::base_dir();
-        let ready = winsetup::tinytex_installed(&base) && winsetup::poppler_bin(&base).is_some();
-        heading(ui, pal, tr!("TeX für Windows einrichten" | "Set up TeX for Windows"));
+    /// "Set up TeX": TinyTeX + template packages (+ Poppler on Windows), without admin rights.
+    fn tex_setup_card(&mut self, ui: &mut Ui, pal: &Palette) {
+        use crate::texsetup::{self, Progress};
+        let base = texsetup::base_dir();
+        let ready = texsetup::ready(&base);
+        let mac = cfg!(target_os = "macos");
+        heading(ui, pal, if mac { tr!("TeX für macOS einrichten" | "Set up TeX for macOS") } else { tr!("TeX für Windows einrichten" | "Set up TeX for Windows") });
         let mut start = false;
         card(ui, pal, |ui| {
             ui.add_space(4.0);
@@ -1102,25 +1105,33 @@ impl App {
                 .color(pal.text),
             );
             ui.add_space(4.0);
-            for (what, why, size) in [
-                ("TinyTeX", tr!("pdflatex, latexmk, tlmgr und ein eigenes Perl" | "pdflatex, latexmk, tlmgr and its own Perl"), "74 MB"),
+            let mut items = vec![
+                ("TinyTeX", if mac { tr!("pdflatex, latexmk und tlmgr" | "pdflatex, latexmk and tlmgr") } else { tr!("pdflatex, latexmk, tlmgr und ein eigenes Perl" | "pdflatex, latexmk, tlmgr and its own Perl") }, if mac { "67 MB" } else { "74 MB" }),
                 (tr!("Vorlagen-Pakete" | "Template packages"), tr!("KOMA-Script, biblatex, Beamer … sowie biber und synctex" | "KOMA-Script, biblatex, Beamer … plus biber and synctex"), "35 MB"),
-                ("Poppler", tr!("PDF-Vorschau" | "PDF preview"), "41 MB"),
-            ] {
+            ];
+            if !mac {
+                items.push(("Poppler", tr!("PDF-Vorschau" | "PDF preview"), "41 MB"));
+            }
+            for (what, why, size) in items {
                 // name and size on one line, the description below (wraps in narrow windows)
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(ic::CHECK).font(widgets::ui_font(11.0)).color(pal.accent));
                     ui.label(egui::RichText::new(what).font(widgets::bold_font(12.5)).color(pal.bright));
                     ui.label(egui::RichText::new(size).font(widgets::mono_font(11.5)).color(pal.dim));
                 });
-                ui.indent(("winsetup-why", what), |ui| {
+                ui.indent(("texsetup-why", what), |ui| {
                     ui.label(egui::RichText::new(why).font(widgets::ui_font(12.0)).color(pal.subtext));
                 });
                 ui.add_space(2.0);
             }
+            if mac {
+                ui.label(egui::RichText::new(tr!("Die PDF-Vorschau übernimmt macOS selbst – dafür ist nichts nötig." | "macOS renders the PDF preview itself – nothing needed for that.")).font(widgets::ui_font(12.0)).color(pal.subtext));
+                ui.add_space(2.0);
+            }
+            let base = if mac { texsetup::tinytex_dir(&base) } else { base.clone() };
             ui.label(egui::RichText::new(trf!("Ziel: {}" | "Target: {}", base.display())).font(widgets::mono_font(11.0)).color(pal.dim));
             ui.add_space(8.0);
-            match &self.winsetup {
+            match &self.texsetup {
                 Some(s) if s.running() => {
                     let (title, frac, detail) = match &s.current {
                         Progress::Download(t, d, total) => (t.clone(), (*total > 0).then(|| *d as f32 / *total as f32), format!("{:.1} / {:.1} MB", *d as f32 / 1e6, *total as f32 / 1e6)),
@@ -1148,13 +1159,14 @@ impl App {
                     start = widgets::button(ui, ic::REFRESH, tr!("Pakete aktualisieren" | "Update packages"), pal, widgets::BtnKind::Secondary).clicked();
                 }
                 _ => {
-                    start = widgets::button(ui, ic::DOWNLOAD, tr!("Jetzt einrichten (≈ 150 MB)" | "Set up now (≈ 150 MB)"), pal, widgets::BtnKind::Primary).clicked();
+                    let label = if mac { tr!("Jetzt einrichten (≈ 100 MB)" | "Set up now (≈ 100 MB)") } else { tr!("Jetzt einrichten (≈ 150 MB)" | "Set up now (≈ 150 MB)") };
+                    start = widgets::button(ui, ic::DOWNLOAD, label, pal, widgets::BtnKind::Primary).clicked();
                 }
             }
             ui.add_space(4.0);
         });
         if start {
-            self.winsetup = Some(winsetup::start(ui.ctx()));
+            self.texsetup = Some(texsetup::start(ui.ctx()));
         }
     }
 }

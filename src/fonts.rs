@@ -9,6 +9,45 @@ use std::sync::Arc;
 
 const ICONS: &[u8] = include_bytes!("../assets/fonts/SymbolsNerdFont-Regular.ttf");
 
+/// macOS has none of the fonts nEdit uses on Linux, and the TeX it sets up (TinyTeX) brings
+/// no Libertinus – so the Mac build carries them (all SIL Open Font License, see
+/// assets/fonts/LICENSE-*): the same look as on Linux.
+#[cfg(target_os = "macos")]
+mod bundled {
+    pub const UI: &[u8] = include_bytes!("../assets/fonts/AdwaitaSans-Regular.ttf");
+    pub const UI_BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-SemiBold.ttf");
+    pub const MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+    pub const MONO_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
+    pub const DISPLAY: &[u8] = include_bytes!("../assets/fonts/LibertinusSerif-Semibold.otf");
+    pub const SERIF: &[u8] = include_bytes!("../assets/fonts/LibertinusSerif-Regular.otf");
+    pub const SERIF_BOLD: &[u8] = include_bytes!("../assets/fonts/LibertinusSerif-Bold.otf");
+    pub const SERIF_ITALIC: &[u8] = include_bytes!("../assets/fonts/LibertinusSerif-Italic.otf");
+    pub const SERIF_BOLDITALIC: &[u8] = include_bytes!("../assets/fonts/LibertinusSerif-BoldItalic.otf");
+}
+
+/// A font that comes with nEdit on this system (macOS), by role.
+#[allow(unused_variables)]
+fn shipped(role: &str) -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        let b = match role {
+            "ui" => bundled::UI,
+            "ui-bold" => bundled::UI_BOLD,
+            "mono" => bundled::MONO,
+            "mono-bold" => bundled::MONO_BOLD,
+            "display" => bundled::DISPLAY,
+            "serif" => bundled::SERIF,
+            "serif-bold" => bundled::SERIF_BOLD,
+            "serif-italic" => bundled::SERIF_ITALIC,
+            "serif-bolditalic" => bundled::SERIF_BOLDITALIC,
+            _ => return None,
+        };
+        return Some(b.to_vec());
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
 fn read(path: &Path) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
@@ -59,7 +98,8 @@ pub fn install(ctx: &egui::Context) {
 
     let ui = add(
         "ui",
-        fc_match("Adwaita Sans", "adwaita")
+        shipped("ui")
+            .or_else(|| fc_match("Adwaita Sans", "adwaita"))
             .or_else(|| fc_match("Inter", "inter"))
             .or_else(|| first_existing(&["C:\\Windows\\Fonts\\segoeui.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf"]))
             .or_else(|| tex("SourceSansPro-Regular.otf"))
@@ -67,7 +107,8 @@ pub fn install(ctx: &egui::Context) {
     );
     let ui_bold = add(
         "ui-bold",
-        first_existing(&["/usr/share/fonts/noto/NotoSans-SemiBold.ttf", "/usr/share/fonts/noto/NotoSans-Bold.ttf"])
+        shipped("ui-bold")
+            .or_else(|| first_existing(&["/usr/share/fonts/noto/NotoSans-SemiBold.ttf", "/usr/share/fonts/noto/NotoSans-Bold.ttf"]))
             .or_else(|| fc_match("Inter:semibold", "inter"))
             .or_else(|| first_existing(&["C:\\Windows\\Fonts\\seguisb.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"]))
             .or_else(|| tex("SourceSansPro-Semibold.otf"))
@@ -75,7 +116,8 @@ pub fn install(ctx: &egui::Context) {
     );
     let mono = add(
         "mono",
-        fc_match("JetBrainsMono Nerd Font", "jetbrains")
+        shipped("mono")
+            .or_else(|| fc_match("JetBrainsMono Nerd Font", "jetbrains"))
             .or_else(|| fc_match("JetBrains Mono", "jetbrains"))
             .or_else(|| fc_match("CaskaydiaMono Nerd Font", "caskaydia"))
             .or_else(|| first_existing(&["C:\\Windows\\Fonts\\consola.ttf"]))
@@ -84,21 +126,22 @@ pub fn install(ctx: &egui::Context) {
     );
     let mono_bold = add(
         "mono-bold",
-        fc_match("JetBrainsMono Nerd Font:bold", "bold")
+        shipped("mono-bold")
+            .or_else(|| fc_match("JetBrainsMono Nerd Font:bold", "bold"))
             .or_else(|| fc_match("JetBrains Mono:bold", "bold"))
             .or_else(|| first_existing(&["C:\\Windows\\Fonts\\consolab.ttf"]))
             .or_else(|| tex("SourceCodePro-Bold.otf"))
             .or_else(|| fc_match("monospace:bold", "bold")),
     );
     add("icons", Some(ICONS.to_vec()));
-    let display = add("display", tex("LibertinusSerif-Semibold.otf").or_else(|| fc_match("Libertinus Serif:semibold", "libertinus")));
+    let display = add("display", tex("LibertinusSerif-Semibold.otf").or_else(|| fc_match("Libertinus Serif:semibold", "libertinus")).or_else(|| shipped("display")));
     let serif_files = [
         ("serif", "LibertinusSerif-Regular.otf", "serif"),
         ("serif-bold", "LibertinusSerif-Bold.otf", "serif:bold"),
         ("serif-italic", "LibertinusSerif-Italic.otf", "serif:italic"),
         ("serif-bolditalic", "LibertinusSerif-BoldItalic.otf", "serif:bold:italic"),
     ];
-    let serif_ok: Vec<(&str, bool)> = serif_files.iter().map(|(name, file, fc)| (*name, add(name, tex(file).or_else(|| fc_match(fc, ""))))).collect();
+    let serif_ok: Vec<(&str, bool)> = serif_files.iter().map(|(name, file, fc)| (*name, add(name, tex(file).or_else(|| shipped(name)).or_else(|| fc_match(fc, ""))))).collect();
 
     // base families: preferred font first, then icons, then egui's defaults
     let mut prepend = |family: FontFamily, names: &[(&str, bool)]| {

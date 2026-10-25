@@ -907,6 +907,15 @@ fn fix_card(ui: &mut Ui, pal: &Palette, fix: &crate::fixes::Fix, installing: boo
                         ui.ctx().copy_text(command.clone());
                     }
                 }
+                FixAction::SetupTex => {
+                    if installing {
+                        let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                        widgets::draw_spinner(ui, r.center(), 7.0, col);
+                        ui.label(egui::RichText::new(tr!("TeX wird eingerichtet …" | "Setting up TeX …")).color(pal.subtext));
+                    } else if widgets::button(ui, ic::DOWNLOAD, tr!("TeX jetzt einrichten" | "Set up TeX now"), pal, BtnKind::Primary).clicked() {
+                        run = true;
+                    }
+                }
                 FixAction::None => {}
             });
         })
@@ -921,7 +930,7 @@ fn logs_view(app: &mut App, ui: &mut Ui, pal: &Palette, t: Tab, now: f64) {
     let mut jump: Option<(String, usize)> = None;
     let mut run_fix: Option<crate::fixes::Fix> = None;
     let mut open_packages = false;
-    let installing = app.tex_install.is_some();
+    let installing = app.tex_install.is_some() || app.texsetup.as_ref().is_some_and(|s| s.running());
     let ws = app.ws_mut(t);
     Frame::new().inner_margin(Margin::same(14)).show(ui, |ui| {
         ui.horizontal(|ui| {

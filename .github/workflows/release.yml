@@ -17,7 +17,6 @@ jobs:
         include:
           - { os: ubuntu-latest, name: nedit-linux-x86_64, bin: nedit, archive: tar.gz, raw: nedit-linux-x86_64 }
           - { os: windows-latest, name: nedit-windows-x86_64, bin: nedit.exe, archive: zip, raw: nedit-windows-x86_64.exe }
-          - { os: macos-latest, name: nedit-macos-arm64, bin: nedit, archive: tar.gz, raw: nedit-macos-arm64 }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,3 +41,23 @@ jobs:
           files: |
             dist/${{ matrix.name }}.${{ matrix.archive }}
             dist/${{ matrix.raw }}
+
+  macos:
+    name: nedit-macos-universal
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: nEdit.app bauen (Apple Silicon + Intel)
+        run: packaging/macos/build-app.sh dist
+      - name: Starttest
+        run: dist/nEdit.app/Contents/MacOS/nedit --version
+      - name: Ältere Updater (≤ 0.5) erwarten diesen Namen
+        run: cp dist/nedit-macos-universal dist/nedit-macos-arm64
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/nEdit-macOS.dmg
+            dist/nEdit-macOS.zip
+            dist/nedit-macos-universal
+            dist/nedit-macos-arm64

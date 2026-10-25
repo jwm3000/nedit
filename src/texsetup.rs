@@ -1,18 +1,21 @@
-//! Windows: set up a minimal TeX system from inside nEdit – no admin rights, no installer.
+//! Set up a minimal TeX system from inside nEdit – no admin rights, no installer
+//! (Windows and macOS; on Linux the package manager does it).
 //!
-//! - TinyTeX-1: a small TeX Live with pdflatex, latexmk, tlmgr and its own Perl (which
-//!   latexmk needs – MiKTeX would need a separate Perl)
+//! - TinyTeX-1: a small TeX Live with pdflatex, latexmk and tlmgr (on Windows with its own
+//!   Perl, which latexmk needs; macOS ships Perl)
 //! - the packages the built-in TU Graz templates need, plus biber and synctex, via tlmgr
-//! - Poppler (pdfinfo, pdftoppm, pdftotext) for the PDF preview
+//! - Windows only: Poppler (pdfinfo, pdftoppm, pdftotext) for the PDF preview – macOS
+//!   renders PDFs itself
 //!
-//! Everything lives in one folder (`%APPDATA%\nEdit`). nEdit puts the bin folders on PATH
-//! for its own processes at start; the system PATH is not touched.
+//! Windows: everything in one folder (`%APPDATA%\nEdit`). macOS: `~/Library/TinyTeX`, where
+//! TinyTeX's own installer puts it (an existing TinyTeX, e.g. from R, is reused). nEdit puts
+//! the bin folder on PATH for its own processes at start; the system PATH is not touched.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 
-/// Always the current TinyTeX build (fixed name for the "daily" release).
-pub const TINYTEX_URL: &str = "https://github.com/rstudio/tinytex-releases/releases/download/daily/TinyTeX-1-windows.exe";
+/// Always the current TinyTeX build (fixed names of the "daily" release).
+const TINYTEX_BASE: &str = "https://github.com/rstudio/tinytex-releases/releases/download/daily/";
 const POPPLER_API: &str = "https://api.github.com/repos/oschwartz10612/poppler-windows/releases/latest";
 
 /// What the built-in thesis and slide templates load beyond TinyTeX-1 (taken from the files
@@ -24,17 +27,36 @@ pub const TEMPLATE_PACKAGES: &[&str] = &[
     "units", "xpatch", "xurl", "biber", "synctex",
 ];
 
-/// Folder for the tools. TeX cannot cope with spaces or non-ASCII characters in paths, so –
-/// like TinyTeX's own installer – fall back to ProgramData if APPDATA has them.
+/// Is there a setup assistant for this system?
+pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos"));
+
+/// Folder for the tools (Windows). TeX cannot cope with spaces or non-ASCII characters in
+/// paths, so – like TinyTeX's own installer – fall back to ProgramData if APPDATA has them.
 pub fn base_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        return dirs::home_dir().unwrap_or_default().join("Library");
+    }
     let ok = |p: &Path| p.to_str().is_some_and(|s| s.chars().all(|c| c.is_ascii_graphic()));
     let appdata = std::env::var_os("APPDATA").map(PathBuf::from).or_else(dirs::config_dir).unwrap_or_default();
     let base = if ok(&appdata) { appdata } else { std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or(appdata) };
     base.join("nEdit")
 }
 
+/// Download of the TinyTeX bundle for this system and its file name.
+fn tinytex_file() -> &'static str {
+    if cfg!(target_os = "macos") { "TinyTeX-1-darwin.tar.xz" } else { "TinyTeX-1-windows.exe" }
+}
+
+pub fn tinytex_dir(base: &Path) -> PathBuf {
+    base.join("TinyTeX")
+}
+
 pub fn tinytex_bin(base: &Path) -> PathBuf {
-    base.join("TinyTeX").join("bin").join("windows")
+    tinytex_dir(base).join("bin").join(if cfg!(target_os = "macos") { "universal-darwin" } else { "windows" })
+}
+
+fn exe(name: &str) -> String {
+    if cfg!(windows) { format!("{name}.exe") } else { name.to_string() }
 }
 
 /// The Poppler zip has a versioned top folder; find the folder with pdftoppm.exe.
@@ -54,41 +76,51 @@ pub fn poppler_bin(base: &Path) -> Option<PathBuf> {
 }
 
 pub fn tinytex_installed(base: &Path) -> bool {
-    tinytex_bin(base).join("pdflatex.exe").is_file()
+    tinytex_bin(base).join(exe("pdflatex")).is_file()
+}
+
+/// Everything the assistant sets up is there.
+pub fn ready(base: &Path) -> bool {
+    tinytex_installed(base) && (!cfg!(windows) || poppler_bin(base).is_some())
+}
+
+/// tlmgr of the TinyTeX nEdit manages, if it is set up.
+pub fn own_tlmgr() -> Option<PathBuf> {
+    let base = base_dir();
+    SUPPORTED.then(|| tinytex_bin(&base).join(if cfg!(windows) { "tlmgr.bat" } else { "tlmgr" })).filter(|p| p.is_file())
 }
 
 /// Bin folders set up by nEdit, for PATH.
-pub fn bundled_paths(base: &Path) -> Vec<PathBuf> {
-    let mut v = vec![];
-    if tinytex_installed(base) {
-        v.push(tinytex_bin(base));
+pub fn bundled_paths() -> Vec<PathBuf> {
+    if !SUPPORTED {
+        return vec![];
     }
-    v.extend(poppler_bin(base));
+    let base = base_dir();
+    let mut v = vec![];
+    if tinytex_installed(&base) {
+        v.push(tinytex_bin(&base));
+    }
+    if cfg!(windows) {
+        v.extend(poppler_bin(&base));
+    }
     v
 }
 
 /// `PATH` with `dirs` in front (each only once).
 pub fn path_with(dirs: &[PathBuf], path: Option<std::ffi::OsString>) -> std::ffi::OsString {
     let old: Vec<PathBuf> = path.as_ref().map(|p| std::env::split_paths(p).collect()).unwrap_or_default();
-    let mut all: Vec<PathBuf> = dirs.to_vec();
-    all.extend(old.into_iter().filter(|p| !dirs.contains(p)));
+    let mut all: Vec<PathBuf> = vec![];
+    for d in dirs.iter().cloned().chain(old) {
+        if !all.contains(&d) {
+            all.push(d);
+        }
+    }
     std::env::join_paths(all).unwrap_or_default()
 }
 
-/// Make the tools nEdit installed visible to its own processes. Called at start (before
-/// any thread) and after the setup.
-pub fn add_to_path() {
-    if !cfg!(windows) {
-        return;
-    }
-    let dirs = bundled_paths(&base_dir());
-    if dirs.is_empty() {
-        return;
-    }
-    let p = path_with(&dirs, std::env::var_os("PATH"));
-    // SAFETY: on Windows the process environment is guarded by the OS (no data race in
-    // libc's environ as on Unix); at start no other thread exists yet anyway.
-    unsafe { std::env::set_var("PATH", p) };
+/// Make freshly set up tools visible to the processes nEdit starts (after the setup).
+fn add_to_path() {
+    crate::platform::add_tool_dirs(&bundled_paths());
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +175,29 @@ impl Setup {
     }
 }
 
+/// `nedit --setup-tex`: the same setup from a terminal, with its progress printed.
+pub fn cli() -> Result<(), String> {
+    if !SUPPORTED {
+        return Err(tr!("Auf Linux installiert der Paketmanager TeX – siehe Einstellungen → TeX & Werkzeuge." | "On Linux the package manager installs TeX – see Settings → TeX & tools.").into());
+    }
+    let last = std::sync::Mutex::new(String::new());
+    run(&base_dir(), &|m| match m {
+        Progress::Download(t, d, total) => {
+            let line = format!("{t}: {:.0} / {:.0} MB", d as f64 / 1e6, total as f64 / 1e6);
+            let mut l = last.lock().unwrap();
+            if *l != line {
+                eprint!("\r{line}   ");
+                *l = line;
+            }
+        }
+        Progress::Step(t) => eprintln!("\n{t}"),
+        Progress::Line(l) => eprintln!("  {l}"),
+        Progress::Done | Progress::Failed(_) => {}
+    })?;
+    eprintln!("\n{}", trf!("Fertig: {}" | "Done: {}", tinytex_bin(&base_dir()).display()));
+    Ok(())
+}
+
 /// Start the setup in the background.
 pub fn start(ctx: &egui::Context) -> Setup {
     let (tx, rx) = channel();
@@ -162,27 +217,32 @@ pub fn start(ctx: &egui::Context) -> Setup {
 
 fn run(base: &Path, send: &dyn Fn(Progress)) -> Result<(), String> {
     std::fs::create_dir_all(base).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        // latexmk and tlmgr are Perl scripts; macOS ships Perl (TinyTeX checks the same)
+        let perl = crate::platform::cmd("perl").args(["-mFile::Find", "/dev/null"]).status().is_ok_and(|s| s.success());
+        if !perl {
+            return Err(tr!("Perl fehlt (latexmk und tlmgr brauchen es) – mit „xcode-select --install“ nachinstallieren." | "Perl is missing (latexmk and tlmgr need it) – install it with “xcode-select --install”.").into());
+        }
+    }
     // 1. TinyTeX
     if !tinytex_installed(base) {
         let title = tr!("TinyTeX herunterladen" | "Downloading TinyTeX").to_string();
-        let bytes = crate::updater::download(TINYTEX_URL, &|d, t| send(Progress::Download(title.clone(), d, t)))?;
-        let exe = base.join("TinyTeX-1-windows.exe");
-        std::fs::write(&exe, bytes).map_err(|e| e.to_string())?;
+        let url = format!("{TINYTEX_BASE}{}", tinytex_file());
+        let bytes = crate::updater::download(&url, &|d, t| send(Progress::Download(title.clone(), d, t)))?;
         send(Progress::Step(tr!("TinyTeX entpacken" | "Unpacking TinyTeX").into()));
-        let _ = std::fs::remove_dir_all(base.join("TinyTeX"));
-        // a 7-Zip self-extractor: -y extracts into the working directory without asking
-        let st = crate::platform::cmd(&exe).arg("-y").current_dir(base).status().map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&exe);
-        if !st.success() || !tinytex_installed(base) {
+        let _ = std::fs::remove_dir_all(tinytex_dir(base));
+        unpack_tinytex(base, &bytes)?;
+        if !tinytex_installed(base) {
             return Err(tr!("TinyTeX konnte nicht entpackt werden" | "TinyTeX could not be unpacked").into());
         }
     }
     // 2. packages for the templates (+ biber, synctex)
     send(Progress::Step(trf!("{} TeX-Pakete installieren" | "Installing {} TeX packages", TEMPLATE_PACKAGES.len())));
-    let tlmgr = tinytex_bin(base).join("tlmgr.bat");
+    let tlmgr = own_tlmgr().ok_or(tr!("tlmgr fehlt in TinyTeX" | "tlmgr is missing in TinyTeX"))?;
     tlmgr_install(&tlmgr, TEMPLATE_PACKAGES, send)?;
-    // 3. Poppler for the PDF preview
-    if poppler_bin(base).is_none() {
+    // 3. Windows: Poppler for the PDF preview (macOS renders PDFs itself)
+    if cfg!(windows) && poppler_bin(base).is_none() {
         let url = poppler_url()?;
         let title = tr!("Poppler herunterladen (PDF-Vorschau)" | "Downloading Poppler (PDF preview)").to_string();
         let bytes = crate::updater::download(&url, &|d, t| send(Progress::Download(title.clone(), d, t)))?;
@@ -194,6 +254,28 @@ fn run(base: &Path, send: &dyn Fn(Progress)) -> Result<(), String> {
     }
     add_to_path();
     Ok(())
+}
+
+/// Windows: a 7-Zip self-extractor (`-y` extracts into the working directory without asking).
+/// macOS: a .tar.xz with a `TinyTeX/` top folder; the system's tar reads xz.
+fn unpack_tinytex(base: &Path, bytes: &[u8]) -> Result<(), String> {
+    let file = std::env::temp_dir().join(format!("nedit-{}", tinytex_file()));
+    std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
+    let st = if cfg!(windows) {
+        let exe = base.join(tinytex_file());
+        let _ = std::fs::rename(&file, &exe).or_else(|_| std::fs::copy(&file, &exe).map(|_| ()));
+        let st = crate::platform::cmd(&exe).arg("-y").current_dir(base).status();
+        let _ = std::fs::remove_file(&exe);
+        st
+    } else {
+        crate::platform::cmd("tar").arg("-xf").arg(&file).arg("-C").arg(base).status()
+    };
+    let _ = std::fs::remove_file(&file);
+    match st {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(trf!("Entpacken fehlgeschlagen ({s})" | "Unpacking failed ({s})")),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Install packages with tlmgr; its output is passed on line by line.
@@ -279,14 +361,16 @@ mod tests {
     #[test]
     fn finds_tools_and_builds_path() {
         let base = tmp("paths");
-        assert!(bundled_paths(&base).is_empty());
+        assert!(!tinytex_installed(&base) && !ready(&base));
         let bin = tinytex_bin(&base);
         std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("pdflatex.exe"), "").unwrap();
+        std::fs::write(bin.join(exe("pdflatex")), "").unwrap();
+        assert!(tinytex_installed(&base));
         let pop = base.join("poppler/poppler-26.09.0/Library/bin");
         std::fs::create_dir_all(&pop).unwrap();
         std::fs::write(pop.join("pdftoppm.exe"), "").unwrap();
-        assert_eq!(bundled_paths(&base), vec![bin.clone(), pop.clone()]);
+        assert_eq!(poppler_bin(&base), Some(pop.clone()));
+        assert!(ready(&base));
         let old = std::env::join_paths([PathBuf::from("/usr/bin"), bin.clone()]).unwrap();
         let new: Vec<PathBuf> = std::env::split_paths(&path_with(&[bin.clone(), pop.clone()], Some(old))).collect();
         assert_eq!(new, vec![bin, pop, PathBuf::from("/usr/bin")], "own folders first, no duplicates");
@@ -323,9 +407,30 @@ mod tests {
     }
 
     #[test]
-    fn base_dir_has_no_spaces() {
+    fn base_dir_per_system() {
         let b = base_dir();
-        assert!(b.ends_with("nEdit"));
+        if cfg!(target_os = "macos") {
+            assert!(b.ends_with("Library"));
+            assert!(tinytex_bin(&b).ends_with("Library/TinyTeX/bin/universal-darwin"));
+        } else {
+            assert!(b.ends_with("nEdit"));
+        }
+    }
+
+    /// macOS: the real TinyTeX archive unpacks to TinyTeX/bin/universal-darwin (needs the
+    /// network: NEDIT_NET_TESTS=1).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn mac_tinytex_layout() {
+        if std::env::var_os("NEDIT_NET_TESTS").is_none() {
+            return;
+        }
+        let base = tmp("tinytex");
+        let bytes = crate::updater::download(&format!("{TINYTEX_BASE}{}", tinytex_file()), &|_, _| {}).unwrap();
+        unpack_tinytex(&base, &bytes).unwrap();
+        assert!(tinytex_installed(&base), "pdflatex in {}", tinytex_bin(&base).display());
+        assert!(tinytex_bin(&base).join("tlmgr").is_file() && tinytex_bin(&base).join("latexmk").is_file());
+        let _ = std::fs::remove_dir_all(base);
     }
 }
 

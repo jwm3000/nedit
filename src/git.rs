@@ -239,6 +239,9 @@ impl Default for GitState {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+    if !crate::platform::has_git() {
+        return Err(tr!("Git ist nicht installiert" | "Git is not installed").into());
+    }
     let out = crate::platform::cmd("git")
         .current_dir(root)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -937,7 +940,7 @@ fn parse_prs(json: &str) -> Result<Vec<PullRequest>, String> {
 /// Collect repository state (runs on a worker thread for background refreshes).
 fn status_snapshot(root: &Path) -> StatusSnapshot {
     let mut s = StatusSnapshot { git_available: true, is_repo: false, branch: String::new(), remote: None, ahead: 0, behind: 0, changes: vec![], head: String::new(), merging: false };
-    if crate::platform::cmd("git").arg("--version").output().is_err() {
+    if !crate::platform::has_git() {
         s.git_available = false;
         return s;
     }

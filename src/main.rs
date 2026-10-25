@@ -13,6 +13,7 @@ mod fonts;
 mod git;
 mod help;
 mod icons;
+mod pdftools;
 mod pdfview;
 mod plan;
 mod plan_ui;
@@ -35,7 +36,7 @@ mod updater;
 mod vim;
 mod visual;
 mod widgets;
-mod winsetup;
+mod texsetup;
 mod workspace;
 
 /// Window icon (taskbar / title bar); on Linux the desktop file's icon is used as well.
@@ -53,7 +54,7 @@ fn app_icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     updater::cleanup(); // also records our executable path before any update
-    winsetup::add_to_path(); // Windows: TeX tools nEdit set up itself
+    platform::setup_path(); // TeX nEdit set up itself; on macOS also MacTeX, Homebrew …
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("nEdit {}", updater::VERSION);
@@ -69,8 +70,15 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    if args.iter().any(|a| a == "--setup-tex") {
+        if let Err(e) = texsetup::cli() {
+            eprintln!("{}", trf!("Fehler: {e}" | "Error: {e}"));
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{}", trf!("nEdit {} – LaTeX Studio\n\n  nedit            App starten\n  nedit --update   auf das neueste Release aktualisieren\n  nedit --version  Version anzeigen" | "nEdit {} – LaTeX Studio\n\n  nedit            start the app\n  nedit --update   update to the latest release\n  nedit --version  show version", updater::VERSION));
+        println!("{}", trf!("nEdit {} – LaTeX Studio\n\n  nedit              App starten\n  nedit --update     auf das neueste Release aktualisieren\n  nedit --setup-tex  TeX einrichten (Windows, macOS)\n  nedit --version    Version anzeigen" | "nEdit {} – LaTeX Studio\n\n  nedit              start the app\n  nedit --update     update to the latest release\n  nedit --setup-tex  set up TeX (Windows, macOS)\n  nedit --version    show version", updater::VERSION));
         return Ok(());
     }
     let options = eframe::NativeOptions {

@@ -21,7 +21,7 @@ fn sections() -> Vec<Section> {
                 ("Ctrl+P", tr!("Schnellsuche: Dateien, Kapitel, Literatur, Befehle" | "Quick open: files, chapters, literature, commands")),
                 ("Ctrl+S", tr!("Speichern & kompilieren – PDF springt zur Cursorstelle" | "Save & compile – PDF jumps to the cursor")),
                 ("Ctrl+Enter", tr!("Kompilieren" | "Compile")),
-                ("Alt+1 / 2 / 3", tr!("Masterarbeit / Präsentation / Bibliothek" | "Thesis / presentation / library")),
+                (if cfg!(target_os = "macos") { "Ctrl+1 / 2 / 3" } else { "Alt+1 / 2 / 3" }, tr!("Masterarbeit / Präsentation / Bibliothek" | "Thesis / presentation / library")),
                 ("F1", tr!("Diese Hilfe" | "This help")),
                 ("Ctrl + / Ctrl −", tr!("Editor-Schrift größer / kleiner" | "Editor font larger / smaller")),
             ],
@@ -163,7 +163,12 @@ impl App {
                         }
                     });
                 });
-                ui.label(egui::RichText::new(tr!("Ctrl steht für Strg, Shift für Umschalt. Auf dem Mac gilt ⌘ statt Ctrl." | "On macOS use ⌘ instead of Ctrl.")).font(widgets::ui_font(11.5)).color(pal.dim));
+                let legend = if cfg!(target_os = "macos") {
+                    tr!("⌘ Befehlstaste · ⇧ Umschalt · ⌥ Wahltaste · ⌃ Control" | "⌘ Command · ⇧ Shift · ⌥ Option · ⌃ Control")
+                } else {
+                    tr!("Ctrl steht für Strg, Shift für Umschalt. Auf dem Mac gilt ⌘ statt Ctrl." | "On macOS use ⌘ instead of Ctrl.")
+                };
+                ui.label(egui::RichText::new(legend).font(widgets::ui_font(11.5)).color(pal.dim));
                 ui.add_space(10.0);
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for sec in sections() {
@@ -187,7 +192,7 @@ impl App {
                                     ui.set_min_height(30.0);
                                     ui.allocate_ui_with_layout(vec2(key_w, 26.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                         ui.set_min_width(key_w);
-                                        keycaps(ui, keys, pal);
+                                        keycaps(ui, crate::i18n::keys(keys), pal);
                                     });
                                     ui.label(egui::RichText::new(*desc).font(widgets::ui_font(13.0)).color(pal.text));
                                 });

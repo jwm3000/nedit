@@ -1,5 +1,5 @@
-//! PDF preview: page metadata via `pdfinfo`, lazy page rendering via `pdftoppm`
-//! on a small worker pool, and a continuous / single-page viewer widget.
+//! PDF preview: page sizes and lazy page rendering (see `pdftools`: Poppler, or the system
+//! on macOS) on a small worker pool, and a continuous / single-page viewer widget.
 
 use crate::theme::{with_alpha, Palette};
 use egui::{pos2, vec2, Color32, ColorImage, Rect, Sense, TextureHandle, TextureOptions};
@@ -26,20 +26,7 @@ pub fn file_stamp(p: &Path) -> u64 {
 
 impl PdfDoc {
     pub fn open(path: &Path) -> Option<Self> {
-        let out = crate::platform::cmd("pdfinfo").args(["-f", "1", "-l", "100000"]).arg(path).output().ok()?;
-        let s = String::from_utf8_lossy(&out.stdout);
-        let re = regex::Regex::new(r"^Page\s+(\d+) size:\s+([\d.]+) x ([\d.]+)").unwrap();
-        let mut pages = vec![];
-        for l in s.lines() {
-            if let Some(c) = re.captures(l) {
-                pages.push([c[2].parse().unwrap_or(595.0), c[3].parse().unwrap_or(842.0)]);
-            }
-        }
-        if pages.is_empty() {
-            // fallback: single "Page size" line + page count
-            let n = s.lines().find_map(|l| l.strip_prefix("Pages:").and_then(|v| v.trim().parse::<usize>().ok()))?;
-            pages = vec![[595.0, 842.0]; n];
-        }
+        let pages = crate::pdftools::page_sizes(path)?;
         Some(PdfDoc { path: path.to_path_buf(), stamp: file_stamp(path), pages })
     }
 }
@@ -71,37 +58,17 @@ impl Renderer {
     pub fn new(workers: usize) -> Self {
         let (tx, rx) = channel::<RenderReq>();
         let rx = Arc::new(Mutex::new(rx));
-        let tmp = std::env::temp_dir().join(format!("nedit-render-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
-        for w in 0..workers {
+        for _ in 0..workers {
             let rx = rx.clone();
-            let tmp = tmp.clone();
             std::thread::spawn(move || loop {
                 let req = match rx.lock().unwrap().recv() {
                     Ok(r) => r,
                     Err(_) => return,
                 };
-                let prefix = tmp.join(format!("w{w}"));
-                let ok = crate::platform::cmd("pdftoppm")
-                    .args(["-png", "-singlefile", "-aa", "yes", "-aaVector", "yes"])
-                    .args(["-r", &req.dpi.to_string()])
-                    .args(["-f", &(req.page + 1).to_string(), "-l", &(req.page + 1).to_string()])
-                    .arg(&req.path)
-                    .arg(&prefix)
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                let png = prefix.with_extension("png");
-                let image = if ok {
-                    image::open(&png).ok().map(|img| {
-                        let rgba = img.to_rgba8();
-                        let size = [rgba.width() as usize, rgba.height() as usize];
-                        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
-                    })
-                } else {
-                    None
-                };
-                let _ = std::fs::remove_file(&png);
+                let image = crate::pdftools::render(&req.path, req.page, req.dpi).map(|rgba| {
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+                });
                 let _ = req.reply.send(RenderOut { stamp: req.stamp, page: req.page, dpi: req.dpi, image });
                 req.ctx.request_repaint();
             });

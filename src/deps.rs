@@ -137,12 +137,18 @@ impl Report {
     }
     /// One command that installs everything that's missing (where possible).
     pub fn install_all(&self) -> Option<String> {
-        let pkgs: Vec<&str> = self.items.iter().filter(|c| !c.ok).flat_map(|c| packages(self.pm, c.key)).collect();
+        let mac = matches!(self.pm, Pm::Brew | Pm::MacNoBrew);
+        // macOS: one tlmgr call for the TeX packages (git comes separately)
+        let pkgs: Vec<&str> = self.items.iter().filter(|c| !c.ok && !(mac && c.key == Key::Git)).flat_map(|c| packages(self.pm, c.key)).collect();
         let mut uniq: Vec<&str> = vec![];
         for p in pkgs {
             if !uniq.contains(&p) {
                 uniq.push(p);
             }
+        }
+        if mac {
+            let owned: Vec<String> = uniq.iter().map(|s| s.to_string()).collect();
+            return (!owned.is_empty() && has_tool("tlmgr")).then(|| crate::texpkg::tlmgr_command(&owned));
         }
         (!uniq.is_empty() && !matches!(self.pm, Pm::Unknown | Pm::Winget | Pm::MacNoBrew)).then(|| self.pm.install_cmd(&uniq))
     }
@@ -203,9 +209,10 @@ fn packages(pm: Pm, k: Key) -> Vec<&'static str> {
             _ => vec!["texlive-full"],
         },
         Pm::Brew => match k {
-            Poppler => vec!["poppler"],
             Git => vec!["git"],
-            _ => vec![], // TeX parts come from MacTeX (see command)
+            Poppler | Pdflatex | Xelatex | Lualatex => vec![],
+            // TeX packages come from tlmgr (MacTeX, BasicTeX or the TinyTeX nEdit sets up)
+            _ => packages(Pm::MacNoBrew, k),
         },
         // TeX Live (tlmgr) / MiKTeX package names
         Pm::WinMiktex | Pm::WinTexlive | Pm::MacNoBrew => match k {
@@ -237,11 +244,14 @@ fn command_for(pm: Pm, k: Key) -> (Option<String>, Option<&'static str>) {
     };
     let is_tex = !matches!(k, Poppler | Git);
     match (pm, k) {
-        // macOS: the whole TeX side comes with MacTeX
-        (Pm::Brew, _) if is_tex => (Some("brew install --cask mactex-no-gui".into()), Some(tex_link)),
-        (Pm::MacNoBrew, Poppler) => (None, Some("https://brew.sh")),
+        // macOS: TeX itself comes from the setup in nEdit (or MacTeX); single packages from
+        // tlmgr, once there is one. PDFs need nothing (the system renders them).
+        (Pm::Brew | Pm::MacNoBrew, Pdflatex | Xelatex | Lualatex | Poppler) => (None, Some(tex_link)),
         (Pm::MacNoBrew, Git) => (Some("xcode-select --install".into()), None),
-        (Pm::MacNoBrew, Pdflatex | Xelatex | Lualatex) => (None, Some(tex_link)),
+        (Pm::Brew | Pm::MacNoBrew, _) if is_tex => {
+            let pkgs: Vec<String> = packages(pm, k).iter().map(|s| s.to_string()).collect();
+            if has_tool("tlmgr") && !pkgs.is_empty() { (Some(crate::texpkg::tlmgr_command(&pkgs)), None) } else { (None, Some(tex_link)) }
+        }
         // Windows
         (Pm::Winget, Pdflatex | Xelatex | Lualatex | Latexmk | Biber | Koma | Beamer | Biblatex | Pgfplots | OcgP | German) => {
             (Some("winget install MiKTeX.MiKTeX".into()), Some(tex_link))
@@ -282,7 +292,7 @@ pub fn check() -> Report {
         (Pdflatex, "pdfLaTeX", tr!("Kompiliert Arbeit und Folien" | "Compiles thesis and slides"), true, has_tool("pdflatex")),
         (Latexmk, "latexmk", tr!("Steuert das Kompilieren (mehrere Durchläufe)" | "Runs the compile passes"), true, has_tool("latexmk")),
         (Biber, "biber", tr!("Literaturverzeichnis (biblatex)" | "Bibliography (biblatex)"), true, has_tool("biber")),
-        (Poppler, "Poppler", tr!("PDF-Vorschau (pdftoppm, pdfinfo)" | "PDF preview (pdftoppm, pdfinfo)"), true, has_tool("pdftoppm") && has_tool("pdfinfo")),
+        (Poppler, "Poppler", tr!("PDF-Vorschau (pdftoppm, pdfinfo)" | "PDF preview (pdftoppm, pdfinfo)"), true, crate::pdftools::available()),
         (Koma, "KOMA-Script", tr!("Klasse der TU-Graz-Arbeitsvorlage" | "Class of the TU Graz thesis template"), true, file("scrreprt.cls")),
         (Biblatex, "biblatex", tr!("Zitieren in der Vorlage" | "Citations in the template"), true, file("biblatex.sty")),
         (Beamer, "Beamer", tr!("Präsentation (TU-Graz-Theme)" | "Presentation (TU Graz theme)"), true, file("beamer.cls")),
@@ -291,8 +301,10 @@ pub fn check() -> Report {
         (German, tr!("Deutsche Silbentrennung" | "German hyphenation"), tr!("Deutsche Kurzfassung und Texte" | "German abstract and texts"), false, file("ngerman.ldf")),
         (Xelatex, "XeLaTeX", tr!("Optional – für Systemschriften" | "Optional – for system fonts"), false, has_tool("xelatex")),
         (Lualatex, "LuaLaTeX", tr!("Optional – für Systemschriften" | "Optional – for system fonts"), false, has_tool("lualatex")),
-        (Git, "Git", tr!("Versionen und Verlauf" | "Versions and history"), false, has_tool("git")),
+        (Git, "Git", tr!("Versionen und Verlauf" | "Versions and history"), false, crate::platform::has_git()),
     ];
+    // macOS renders PDFs itself – nothing to check or install
+    let list: Vec<_> = list.into_iter().filter(|c| !(cfg!(target_os = "macos") && c.0 == Poppler)).collect();
     // screenshot mode can pretend components are missing (NEDIT_FAKE_MISSING=biber,ocg-p)
     let fake = std::env::var("NEDIT_FAKE_MISSING").ok().filter(|_| std::env::var_os("NEDIT_SHOT").is_some()).unwrap_or_default().to_lowercase();
     let items = list
@@ -315,8 +327,9 @@ mod tests {
         assert_eq!(command_for(Pm::Pacman, Key::Biber).0.unwrap(), "sudo pacman -S --needed biber");
         assert_eq!(command_for(Pm::Apt, Key::German).0.unwrap(), "sudo apt install texlive-lang-german");
         assert_eq!(command_for(Pm::Dnf, Key::Koma).0.unwrap(), "sudo dnf install 'tex(scrreprt.cls)'");
-        assert_eq!(command_for(Pm::Brew, Key::Biber).0.unwrap(), "brew install --cask mactex-no-gui");
-        assert_eq!(command_for(Pm::Brew, Key::Poppler).0.unwrap(), "brew install poppler");
+        assert_eq!(command_for(Pm::Brew, Key::Pdflatex), (None, Some("https://tug.org/mactex/")));
+        assert_eq!(command_for(Pm::Brew, Key::Git).0.unwrap(), "brew install git");
+        assert_eq!(command_for(Pm::MacNoBrew, Key::Git).0.unwrap(), "xcode-select --install");
         assert!(command_for(Pm::Winget, Key::Pdflatex).0.unwrap().contains("MiKTeX"));
         assert!(command_for(Pm::WinMiktex, Key::Poppler).1.is_some());
         let r = Report {

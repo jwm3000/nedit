@@ -290,7 +290,7 @@ pub struct App {
     /// TeX packages being installed in a terminal window
     pub tex_install: Option<TexInstall>,
     /// Windows: TeX being set up by nEdit itself
-    pub winsetup: Option<crate::winsetup::Setup>,
+    pub texsetup: Option<crate::texsetup::Setup>,
     deps_rx: Option<std::sync::mpsc::Receiver<crate::deps::Report>>,
     pub settings_open: bool,
     pub settings_page: crate::settings_ui::Page,
@@ -381,7 +381,7 @@ impl App {
             fig_index: Default::default(),
             deps: None,
             tex_install: None,
-            winsetup: None,
+            texsetup: None,
             deps_rx: None,
             settings_open: false,
             settings_page: Default::default(),
@@ -996,6 +996,13 @@ impl App {
                 }
             }
             FixAction::Install { command } => self.install_tex(t, command.clone(), ctx, now),
+            FixAction::SetupTex => {
+                // show the progress where the setup lives, and recompile when it is done
+                if self.texsetup.as_ref().is_none_or(|s| !s.running()) {
+                    self.texsetup = Some(crate::texsetup::start(ctx));
+                }
+                self.open_settings(Some(crate::settings_ui::Page::System), ctx);
+            }
             FixAction::None => {}
         }
     }
@@ -1237,8 +1244,8 @@ impl App {
                 self.deps_rx = None;
             }
         }
-        if self.winsetup.as_mut().is_some_and(|s| s.poll()) {
-            match self.winsetup.as_ref().and_then(|s| s.finished.clone()) {
+        if self.texsetup.as_mut().is_some_and(|s| s.poll()) {
+            match self.texsetup.as_ref().and_then(|s| s.finished.clone()) {
                 Some(Ok(())) => {
                     let g = self.pal.green;
                     self.toast(ic::CHECK_CIRCLE, tr!("TeX ist eingerichtet – kompiliere" | "TeX is set up – compiling"), g, now);
@@ -1327,9 +1334,10 @@ impl App {
                 i.consume_key(Modifiers::COMMAND, Key::S),
                 i.consume_key(Modifiers::COMMAND, Key::Enter),
                 i.consume_key(Modifiers::COMMAND, Key::F),
-                i.consume_key(Modifiers::ALT, Key::Num1),
-                i.consume_key(Modifiers::ALT, Key::Num2),
-                i.consume_key(Modifiers::ALT, Key::Num3),
+                // macOS: ⌥ + digit types a character (¡ ™ £), so the Mac way is ⌘1/2/3
+                i.consume_key(Modifiers::ALT, Key::Num1) || (cfg!(target_os = "macos") && i.consume_key(Modifiers::COMMAND, Key::Num1)),
+                i.consume_key(Modifiers::ALT, Key::Num2) || (cfg!(target_os = "macos") && i.consume_key(Modifiers::COMMAND, Key::Num2)),
+                i.consume_key(Modifiers::ALT, Key::Num3) || (cfg!(target_os = "macos") && i.consume_key(Modifiers::COMMAND, Key::Num3)),
                 i.consume_key(Modifiers::COMMAND, Key::Plus) || i.consume_key(Modifiers::COMMAND, Key::Equals),
                 i.consume_key(Modifiers::COMMAND, Key::Minus),
             )
@@ -1339,7 +1347,9 @@ impl App {
             // Ctrl+D (without Shift): git diff of the current file
             // (in the presentation Ctrl+D duplicates slides / elements)
             let diff = self.tab == Tab::Thesis && !i.modifiers.shift && i.consume_key(Modifiers::COMMAND, Key::D);
-            (i.consume_key(Modifiers::NONE, Key::F11), i.consume_key(Modifiers::COMMAND, Key::E), i.key_pressed(Key::Escape), doc, diff)
+            // full screen: F11, on macOS (where the system takes F11) ⌃⌘F
+            let full = i.consume_key(Modifiers::NONE, Key::F11) || (cfg!(target_os = "macos") && i.consume_key(Modifiers::CTRL | Modifiers::COMMAND, Key::F));
+            (full, i.consume_key(Modifiers::COMMAND, Key::E), i.key_pressed(Key::Escape), doc, diff)
         });
         if diff_key {
             self.toggle_file_diff(now);
@@ -1492,6 +1502,14 @@ pub fn truncate(s: &str, n: usize) -> String {
 // ───────────────────────────── frame ─────────────────────────────
 
 impl eframe::App for App {
+    /// Closing the window (⌘Q on macOS, Alt+F4 …) right after typing: save what auto-save
+    /// (after 1.2 s idle) has not written yet.
+    fn on_exit(&mut self) {
+        if std::env::var_os("NEDIT_SHOT").is_none() {
+            self.save_all();
+        }
+    }
+
     /// egui drops keyboard focus on a plain Esc before any widget sees it. In vim mode we
     /// tag that Esc (harmless modifier) so the editor keeps focus and gets Normal mode.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -3135,9 +3153,9 @@ impl App {
             let f = self.thesis.fixes[0].clone();
             self.apply_fix(Tab::Thesis, f, ctx, now);
         }
-        if name.contains("winsetup") && self.winsetup.is_none() {
+        if (name.contains("winsetup") || name.contains("texsetup")) && self.texsetup.is_none() {
             self.open_settings(Some(crate::settings_ui::Page::System), ctx);
-            self.winsetup = Some(crate::winsetup::demo(ctx));
+            self.texsetup = Some(crate::texsetup::demo(ctx));
         }
         if name.contains("texpkgs") && self.dialog.is_none() {
             crate::texpkg::preload(ctx);
@@ -3392,21 +3410,11 @@ pub fn fmt_thousands(n: usize) -> String {
     out
 }
 
-/// Load a figure as texture: images directly, PDFs (first page) through pdftoppm.
+/// Load a figure as texture: images directly, PDFs as their first page.
 fn load_figure(ctx: &egui::Context, f: &std::path::Path) -> Option<egui::TextureHandle> {
     let ext = f.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let img = if ext == "pdf" {
-        let tmp = std::env::temp_dir().join(format!("nedit-fig-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
-        let out = tmp.join(format!("{:x}", crate::editor::hash_str(&f.to_string_lossy())));
-        let ok = crate::platform::cmd("pdftoppm").args(["-png", "-r", "110", "-f", "1", "-l", "1", "-singlefile"]).arg(f).arg(&out).status().is_ok_and(|s| s.success());
-        if !ok {
-            return None;
-        }
-        let png = out.with_extension("png");
-        let i = image::open(&png).ok();
-        let _ = std::fs::remove_file(&png);
-        i
+        crate::pdftools::render(f, 0, 110).map(image::DynamicImage::ImageRgba8)
     } else {
         image::open(f).ok()
     }?;

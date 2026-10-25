@@ -335,13 +335,7 @@ pub fn import_pdfs(files: Vec<PathBuf>, tx: Sender<ShelfMsg>, ctx: egui::Context
             let name = f.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
             let _ = tx.send(ShelfMsg::Status(trf!("Analysiere {name} …" | "Analyzing {name} …")));
             ctx.request_repaint();
-            let text = crate::platform::cmd("pdftotext")
-                .args(["-l", "2", "-q"])
-                .arg(&f)
-                .arg("-")
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
+            let text = crate::pdftools::text(&f, 2);
             let doi_re = regex::Regex::new(r"(?i)\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+[A-Za-z0-9])").unwrap();
             let arxiv_re = regex::Regex::new(r"arXiv:(\d{4}\.\d{4,5})").unwrap();
             let mut entry = None;
@@ -365,13 +359,8 @@ pub fn import_pdfs(files: Vec<PathBuf>, tx: Sender<ShelfMsg>, ctx: egui::Context
 }
 
 fn fallback_entry(f: &Path, text: &str) -> BibEntry {
-    let info = crate::platform::cmd("pdfinfo").arg(f).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
-    let field = |k: &str| {
-        info.lines()
-            .find_map(|l| l.strip_prefix(k).map(|v| v.trim().to_string()))
-            .filter(|v| !v.is_empty())
-    };
-    let mut title = field("Title:").unwrap_or_default();
+    let info = crate::pdftools::info(f);
+    let mut title = info.title.clone();
     if title.len() < 4 {
         // first reasonably long line of the first page
         title = text.lines().map(str::trim).find(|l| l.len() > 12 && l.len() < 200).unwrap_or("").to_string();
@@ -381,12 +370,11 @@ fn fallback_entry(f: &Path, text: &str) -> BibEntry {
     }
     let mut e = BibEntry { kind: "misc".into(), key: String::new(), fields: vec![] };
     e.set("title", &title);
-    if let Some(a) = field("Author:") {
-        e.set("author", &a.replace([';', ','], " and "));
+    if !info.author.is_empty() {
+        e.set("author", &info.author.replace([';', ','], " and "));
     }
-    let year = field("CreationDate:").and_then(|d| d.split_whitespace().last().map(String::from)).unwrap_or_default();
-    if year.len() == 4 {
-        e.set("year", &year);
+    if info.year.len() == 4 {
+        e.set("year", &info.year);
     }
     e
 }
